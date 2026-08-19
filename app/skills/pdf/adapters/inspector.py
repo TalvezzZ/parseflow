@@ -94,6 +94,7 @@ class PdfInspectorParserProvider(Provider):
             blocks=blocks,
             parser={"name": self.manifest.name, "version": self.manifest.version},
             metadata={"title": getattr(result, "title", None)},
+            representations={"plain_text": markdown, "markdown": markdown},
             quality=metrics,
         )
         return ProviderResult(

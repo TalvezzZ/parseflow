@@ -22,6 +22,16 @@ function documentOf(task?: Task | null): Json | undefined {
   const data = result?.data as Json | undefined
   return data?.document as Json | undefined
 }
+function representationsOf(document?: Json): Json {
+  const raw = document?.representations
+  const representations = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Json : {}
+  const pageText = Array.isArray(document?.pages) ? document.pages
+    .filter((page): page is Json => Boolean(page) && typeof page === 'object' && !Array.isArray(page))
+    .map((page) => String(page.text || ''))
+    .filter(Boolean)
+    .join('\n\n') : ''
+  return { ...representations, plain_text: representations.plain_text || pageText, markdown: representations.markdown || pageText }
+}
 function storeRecent(task: Task) {
   const old = JSON.parse(localStorage.getItem(recentKey) || '[]') as Task[]
   const items = [task, ...old.filter((item) => item.task_id !== task.task_id)].slice(0, 8)
@@ -78,7 +88,7 @@ function App() {
   }
   const plans = (task?.plan?.steps as Json[] | undefined) || []
   const tables = (document?.tables as Json[] | undefined) || []
-  const representations = (document?.representations as Json | undefined) || {}
+  const representations = representationsOf(document)
   const artifacts = ((document?.images as Json[] | undefined) || []).filter((item) => item.artifact_path || item.path)
 
   return <main className="app-shell">
@@ -95,7 +105,7 @@ function App() {
         <button className="primary" disabled={submitting}>{submitting ? '正在创建任务…' : '开始智能解析'} <span>→</span></button>
       </form>
       <div className="hint"><strong>自动规划</strong><p>系统根据文件类型选择已注册的解析能力；复杂 RTF、旧版 Office 等会自动走增强处理路径。</p></div></aside>
-      <section className="content-panel">{task ? <TaskView task={task} document={document} plans={plans} tables={tables} representations={representations} artifacts={artifacts} activeTab={activeTab} setActiveTab={setActiveTab} /> : <EmptyState recent={recent} open={(item) => { setTask(item); setError('') }} />}</section>
+      <section className="content-panel">{task ? <TaskView task={task} document={document} plans={plans} tables={tables} representations={representations} artifacts={artifacts} activeTab={activeTab} setActiveTab={setActiveTab} backToList={() => { setTask(null); setActiveTab('overview'); setError('') }} /> : <EmptyState recent={recent} open={(item) => { setTask(item); setActiveTab('overview'); setError('') }} />}</section>
     </section>
   </main>
 }
@@ -113,11 +123,11 @@ function SupportedFormats() {
 }
 function EmptyState({ recent, open }: { recent: Task[]; open: (task: Task) => void }) { return <div className="empty"><div className="empty-mark">✦</div><h2>等待文件</h2><p>上传后，系统会创建任务、展示自动解析方案，并在这里呈现可用结果。</p>{recent.length > 0 && <div className="recent"><h3>最近任务</h3>{recent.map((item) => <button key={item.task_id} onClick={() => open(item)}><span>{item.task_id.slice(0, 16)}…</span><em className={`badge ${item.status}`}>{statusLabels[item.status]}</em></button>)}</div>}</div> }
 
-function TaskView({ task, document, plans, tables, representations, artifacts, activeTab, setActiveTab }: { task: Task; document?: Json; plans: Json[]; tables: Json[]; representations: Json; artifacts: Json[]; activeTab: string; setActiveTab: (tab: never) => void }) {
+function TaskView({ task, document, plans, tables, representations, artifacts, activeTab, setActiveTab, backToList }: { task: Task; document?: Json; plans: Json[]; tables: Json[]; representations: Json; artifacts: Json[]; activeTab: string; setActiveTab: (tab: never) => void; backToList: () => void }) {
   const tabs = [['overview','概览'],['text','正文'],['tables',`表格 ${tables.length || ''}`],['markdown','Markdown'],['json','结构化 JSON'],['artifacts',`产物 ${artifacts.length || ''}`],['details','执行详情']] as const
   const duration = taskDuration(task)
   const durationLabel = terminal.has(task.status) ? '整体执行时间' : '已用时间'
-  return <><div className="task-heading"><div><p className="eyebrow">任务 {task.task_id}</p><h2>{statusLabels[task.status]}</h2><p>{task.data_id ? `业务标识：${task.data_id}` : `创建于 ${formatDate(task.created_at)}`}</p></div><div className="task-meta"><span className="duration"><small>{durationLabel}</small><strong>{duration}</strong></span><span className={`badge large ${task.status}`}>{statusLabels[task.status]}</span></div></div>
+  return <><div className="task-detail-toolbar"><button className="back-to-list" type="button" onClick={backToList}>← 返回任务列表</button></div><div className="task-heading"><div><p className="eyebrow">任务 {task.task_id}</p><h2>{statusLabels[task.status]}</h2><p>{task.data_id ? `业务标识：${task.data_id}` : `创建于 ${formatDate(task.created_at)}`}</p></div><div className="task-meta"><span className="duration"><small>{durationLabel}</small><strong>{duration}</strong></span><span className={`badge large ${task.status}`}>{statusLabels[task.status]}</span></div></div>
   <div className="timeline"><Timeline label="任务已创建" state="done" /><Timeline label="自动规划" state={task.plan ? 'done' : task.status === 'queued' ? 'current' : 'waiting'} /><Timeline label="执行解析" state={task.status === 'running' ? 'current' : terminal.has(task.status) ? 'done' : 'waiting'} /><Timeline label="生成结果" state={terminal.has(task.status) ? 'done' : 'waiting'} /></div>
   {plans.length > 0 && <div className="plan-card"><p className="card-label">自动计划 · RULE-BASED</p>{plans.map((step, index) => <div className="plan-step" key={String(step.step_id)}><b>{index + 1}</b><div><strong>{String(step.skill_name)}</strong><p>{String(step.reason)}</p></div><span className={`badge ${String(step.status)}`}>{String(step.status)}</span></div>)}</div>}
   {task.status === 'failed' && <div className="failure"><strong>任务未完成</strong><p>{String(task.error?.message || (task.result?.error as Json | undefined)?.message || '请检查执行详情。')}</p></div>}
@@ -127,7 +137,7 @@ function TaskView({ task, document, plans, tables, representations, artifacts, a
 }
 function Timeline({ label, state }: { label: string; state: string }) { return <div className={`timeline-item ${state}`}><i>{state === 'done' ? '✓' : ''}</i><span>{label}</span></div> }
 function ResultTab({ tab, task, document, tables, representations, artifacts }: { tab: string; task: Task; document?: Json; tables: Json[]; representations: Json; artifacts: Json[] }) {
- if (tab === 'overview') return <div className="overview"><Stat label="文档类型" value={String(document?.document_type || '等待结果')} /><Stat label="表格" value={String(tables.length)} /><Stat label="图片 / 产物" value={String((document?.images as Json[] | undefined)?.length || 0)} /><Stat label="任务状态" value={statusLabels[task.status]} /><section><h3>解析摘要</h3><p>{String((document?.representations as Json | undefined)?.plain_text || '任务完成后，这里将展示正文摘要。').slice(0, 600)}</p></section></div>
+ if (tab === 'overview') return <div className="overview"><Stat label="文档类型" value={String(document?.document_type || '等待结果')} /><Stat label="表格" value={String(tables.length)} /><Stat label="图片 / 产物" value={String((document?.images as Json[] | undefined)?.length || 0)} /><Stat label="任务状态" value={statusLabels[task.status]} /><section><h3>解析摘要</h3><p>{String(representations.plain_text || '任务完成后，这里将展示正文摘要。').slice(0, 600)}</p></section></div>
  if (tab === 'text') return <pre className="text-preview">{String(representations.plain_text || '当前结果没有可用的纯文本表示。')}</pre>
  if (tab === 'markdown') return <pre className="text-preview markdown">{String(representations.markdown || '当前结果没有可用的 Markdown 表示。')}</pre>
  if (tab === 'tables') return <div className="tables">{tables.length ? tables.map((table, index) => <Table key={index} table={table} />) : <NoContent text="当前结果没有可预览的表格。" />}</div>

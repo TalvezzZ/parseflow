@@ -15,11 +15,13 @@ class PdfParseSkill(Skill):
         providers: ProviderRegistry,
         normal_provider: str | None = None,
         fallback_providers: list[str] | None = None,
+        ocr_provider: str | None = None,
     ) -> None:
         self.inspector = inspector
         self.providers = providers
         self.normal_provider = normal_provider
         self.fallback_providers = fallback_providers or []
+        self.ocr_provider = ocr_provider
 
     @property
     def manifest(self) -> SkillManifest:
@@ -43,19 +45,7 @@ class PdfParseSkill(Skill):
             )
 
         context.inspection = inspection
-        if inspection.pdf_type != "text_based":
-            return SkillResult(
-                status="failed",
-                skill_name=self.name,
-                data={"inspection": inspection.model_dump()},
-                error={
-                    "code": "ocr_not_supported",
-                    "message": f"当前版本只支持 text_based PDF，检测结果为: {inspection.pdf_type}",
-                    "retryable": False,
-                },
-            )
-
-        mode = "normal"
+        mode = "normal" if inspection.pdf_type == "text_based" and not inspection.ocr_recommended else "ocr"
         provider_names = self._provider_names(context, mode)
         attempts: list[dict] = []
 
@@ -110,17 +100,20 @@ class PdfParseSkill(Skill):
                 break
 
         last_error = attempts[-1].get("error") if attempts else None
+        unavailable_error = {"code": "ocr_not_configured", "message": "该 PDF 需要 OCR，但本地 PaddleOCR Provider 未启用。请设置 PDF_OCR_ENABLED=true 并安装 OCR 依赖。", "retryable": False} if mode == "ocr" else {"code": "parse_failed", "message": "没有可用的 Provider", "retryable": False}
         return SkillResult(
             status="failed",
             skill_name=self.name,
             data={"inspection": inspection.model_dump(), "attempts": attempts},
-            error=last_error or {"code": "parse_failed", "message": "没有可用的 Provider", "retryable": False},
+            error=last_error or unavailable_error,
         )
 
     def _provider_names(self, context: ParseContext, mode: str) -> list[str]:
         explicit = context.options.provider
         if explicit:
             return [explicit]
+        if mode == "ocr":
+            return [self.ocr_provider] if self.ocr_provider else []
         names = [self.normal_provider] if self.normal_provider else []
         names.extend(self.fallback_providers)
         if not names:

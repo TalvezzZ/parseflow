@@ -60,22 +60,32 @@ async def test_text_pdf_uses_normal_provider() -> None:
 
 
 @pytest.mark.asyncio
-async def test_scanned_pdf_returns_explicit_ocr_not_supported() -> None:
+async def test_scanned_pdf_uses_ocr_provider() -> None:
     normal = FakeProvider("normal.test", "normal")
     ocr = FakeProvider("ocr.test", "ocr")
     skill = PdfParseSkill(
         inspector=FakeInspector("scanned"),
         providers=ProviderRegistry([normal, ocr]),
         normal_provider="normal.test",
+        ocr_provider="ocr.test",
     )
+
+    result = await skill.execute(make_context())
+
+    assert result.status == "success"
+    assert normal.called == 0
+    assert ocr.called == 1
+
+
+@pytest.mark.asyncio
+async def test_scanned_pdf_without_ocr_provider_returns_setup_error() -> None:
+    skill = PdfParseSkill(inspector=FakeInspector("scanned"), providers=ProviderRegistry())
 
     result = await skill.execute(make_context())
 
     assert result.status == "failed"
     assert result.error is not None
-    assert result.error.code == "ocr_not_supported"
-    assert normal.called == 0
-    assert ocr.called == 0
+    assert result.error.code == "ocr_not_configured"
 
 
 @pytest.mark.asyncio

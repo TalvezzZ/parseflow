@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     openai_model: str | None = None
     pdf_normal_provider: str = "pdf.normal.pdf-inspector"
     pdf_fallback_providers: str = ""
+    pdf_ocr_provider: str = "pdf.ocr.paddle"
+    pdf_ocr_enabled: bool = True
+    pdf_ocr_device: str = "cpu"
+    pdf_ocr_lang: str = "ch"
+    pdf_ocr_max_pages: int = 50
+    pdf_ocr_render_scale: float = 2.0
+    pdf_ocr_max_page_pixels: int = 20_000_000
     word_normal_provider: str = "word.normal.mammoth"
     word_fallback_providers: str = ""
     office_converter_provider: str = "office.convert.libreoffice"

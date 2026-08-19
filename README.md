@@ -17,7 +17,7 @@ ParseFlow accepts a single file, automatically selects an appropriate parsing wo
 
 | Category | Formats | Current behavior |
 | --- | --- | --- |
-| Documents | PDF, DOC, DOCX, RTF | Text PDF parsing; DOC/RTF may use LibreOffice conversion where required |
+| Documents | PDF, DOC, DOCX, RTF | Text PDF parsing; scanned/image-based PDFs use optional local PaddleOCR; DOC/RTF may use LibreOffice conversion where required |
 | Spreadsheets | XLS, XLSX, XLSM, CSV, TSV | Table and semantic cell extraction |
 | Presentations | PPT, PPTX | Slide text, tables, and images |
 | Text & structured data | TXT, MD, Markdown, HTML, HTM, XML | Text extraction; XML uses safe structured extraction |
@@ -38,8 +38,21 @@ ParseFlow accepts a single file, automatically selects an appropriate parsing wo
 | --- | --- |
 | [LibreOffice](https://www.libreoffice.org/) (`soffice`) | Legacy Office conversion and complex RTF conversion |
 | [FFmpeg](https://ffmpeg.org/) and `ffprobe` | Audio/video preparation |
+| [PaddleOCR](https://www.paddleocr.ai/) optional Python group | Local OCR for scanned/image-based PDFs |
 
 ParseFlow starts without these optional tools, but the associated conversion or media workflows will report that the provider is unavailable.
+
+### Enable local OCR for scanned PDFs
+
+Install the optional local OCR group once (it includes the local CPU `paddlepaddle` inference engine, PaddleOCR, and PDF rendering support):
+
+```bash
+uv sync --group ocr
+```
+
+When ParseFlow first processes a scanned or image-based PDF, the `pdf.ocr.paddle` provider automatically initializes PaddleOCR and downloads its required OCR model files into PaddleOCR's local cache (normally `~/.paddlex/official_models`). Later requests reuse that local cache and do not require a cloud OCR service.
+
+The default CPU configuration is intended for local deployment. Tune `PDF_OCR_MAX_PAGES`, `PDF_OCR_RENDER_SCALE`, and `PDF_OCR_MAX_PAGE_PIXELS` in `.env` to control runtime and memory usage; set `PDF_OCR_ENABLED=false` to disable OCR routing.
 
 ## Quick start
 

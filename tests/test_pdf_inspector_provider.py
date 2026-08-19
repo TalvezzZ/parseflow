@@ -50,4 +50,5 @@ async def test_pdf_inspector_provider_returns_unified_document(monkeypatch) -> N
     assert result.status == "success"
     assert result.document is not None
     assert result.document.pages[0].text == "# Demo\n\nHello PDF"
+    assert result.document.representations == {"plain_text": "# Demo\n\nHello PDF", "markdown": "# Demo\n\nHello PDF"}
     assert result.document.parser["name"] == "pdf.normal.pdf-inspector"
