@@ -1,6 +1,8 @@
 from app.skills.base import EchoSkill, Skill
 from app.skills.pdf.adapters.inspector import PdfInspectorAdapter, PdfInspectorParserProvider
 from app.skills.pdf.adapters.paddle_ocr import PaddleOcrPdfProvider
+from app.skills.image import ImageParseSkill
+from app.skills.image_ocr import PaddleOcrImageProvider
 from app.skills.pdf.skill import PdfParseSkill
 from app.skills.word.adapters.mammoth import MammothProvider
 from app.skills.word.skill import WordParseSkill
@@ -52,6 +54,13 @@ def create_default_registry() -> SkillRegistry:
             max_page_pixels=settings.pdf_ocr_max_page_pixels,
         ))
     providers = ProviderRegistry(pdf_providers)
+    image_providers = ProviderRegistry()
+    if settings.image_ocr_enabled:
+        image_providers.register(PaddleOcrImageProvider(
+            device=settings.image_ocr_device,
+            lang=settings.image_ocr_lang,
+            max_pixels=settings.image_ocr_max_pixels,
+        ))
     word_providers = ProviderRegistry([MammothProvider()])
     office_providers = ProviderRegistry([
         LibreOfficeProvider(
@@ -103,6 +112,10 @@ def create_default_registry() -> SkillRegistry:
         EchoSkill(),
         text_skill,
         rtf_skill,
+        ImageParseSkill(
+            providers=image_providers,
+            ocr_provider=settings.image_ocr_provider if settings.image_ocr_enabled else None,
+        ),
         PdfParseSkill(
             inspector=PdfInspectorAdapter(),
             providers=providers,

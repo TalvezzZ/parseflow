@@ -18,6 +18,7 @@ ParseFlow accepts a single file, automatically selects an appropriate parsing wo
 | Category | Formats | Current behavior |
 | --- | --- | --- |
 | Documents | PDF, DOC, DOCX, RTF | Text PDF parsing; scanned/image-based PDFs use optional local PaddleOCR; DOC/RTF may use LibreOffice conversion where required |
+| Images | PNG, JPG, JPEG, WEBP, BMP, TIF, TIFF | Optional local PaddleOCR extracts text, Markdown, bounding boxes, and confidence from standalone images |
 | Spreadsheets | XLS, XLSX, XLSM, CSV, TSV | Table and semantic cell extraction |
 | Presentations | PPT, PPTX | Slide text, tables, and images |
 | Text & structured data | TXT, MD, Markdown, HTML, HTM, XML | Text extraction; XML uses safe structured extraction |
@@ -38,11 +39,11 @@ ParseFlow accepts a single file, automatically selects an appropriate parsing wo
 | --- | --- |
 | [LibreOffice](https://www.libreoffice.org/) (`soffice`) | Legacy Office conversion and complex RTF conversion |
 | [FFmpeg](https://ffmpeg.org/) and `ffprobe` | Audio/video preparation |
-| [PaddleOCR](https://www.paddleocr.ai/) optional Python group | Local OCR for scanned/image-based PDFs |
+| [PaddleOCR](https://www.paddleocr.ai/) optional Python group | Local OCR for scanned/image-based PDFs and standalone images |
 
 ParseFlow starts without these optional tools, but the associated conversion or media workflows will report that the provider is unavailable.
 
-### Enable local OCR for scanned PDFs
+### Enable local OCR for scanned PDFs and images
 
 Install the optional local OCR group once (it includes the local CPU `paddlepaddle` inference engine, PaddleOCR, and PDF rendering support):
 
@@ -50,9 +51,9 @@ Install the optional local OCR group once (it includes the local CPU `paddlepadd
 uv sync --group ocr
 ```
 
-When ParseFlow first processes a scanned or image-based PDF, the `pdf.ocr.paddle` provider automatically initializes PaddleOCR and downloads its required OCR model files into PaddleOCR's local cache (normally `~/.paddlex/official_models`). Later requests reuse that local cache and do not require a cloud OCR service.
+When ParseFlow first processes a scanned or image-based PDF, or a standalone supported image, the `pdf.ocr.paddle` or `image.ocr.paddle` provider automatically initializes PaddleOCR and downloads its required OCR model files into PaddleOCR's local cache (normally `~/.paddlex/official_models`). Later requests reuse that local cache and do not require a cloud OCR service.
 
-The default CPU configuration is intended for local deployment. Tune `PDF_OCR_MAX_PAGES`, `PDF_OCR_RENDER_SCALE`, and `PDF_OCR_MAX_PAGE_PIXELS` in `.env` to control runtime and memory usage; set `PDF_OCR_ENABLED=false` to disable OCR routing.
+The default CPU configuration is intended for local deployment. Tune `PDF_OCR_MAX_PAGES`, `PDF_OCR_RENDER_SCALE`, and `PDF_OCR_MAX_PAGE_PIXELS` for PDF OCR, and `IMAGE_OCR_MAX_PIXELS` for image OCR, in `.env` to control runtime and memory usage. Set `PDF_OCR_ENABLED=false` or `IMAGE_OCR_ENABLED=false` to disable the corresponding route.
 
 ## Quick start
 
@@ -161,7 +162,6 @@ It exposes `list_skills`, `execute_skill`, and `parse_office_pipeline`.
 - The task queue is in-process memory; task state does not survive a service restart.
 - Uploaded files and artifacts use local storage; object storage and distributed queues are not included.
 - Audio/video workflows prepare media only; they do not yet produce speech-to-text output.
-- Image-only PDF OCR is not currently implemented.
 
 ## License
 

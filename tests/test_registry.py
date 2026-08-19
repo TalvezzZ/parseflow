@@ -10,6 +10,7 @@ def test_default_registry_exposes_echo_skill() -> None:
     assert registry.list_manifests()[0]["name"] == "system.echo"
     assert registry.get("pdf.parse").manifest["name"] == "pdf.parse"
     assert registry.get("word.parse").manifest["name"] == "word.parse"
+    assert registry.get("image.parse").manifest["name"] == "image.parse"
 
 
 @pytest.mark.asyncio

@@ -97,7 +97,7 @@ function App() {
       <aside className="upload-panel"><h2>开始解析</h2><form onSubmit={submit}>
         <div className="dropzone" role="button" tabIndex={0} aria-label="选择要解析的文件" onDrop={onDrop} onDragOver={(event) => event.preventDefault()} onClick={openFilePicker} onKeyDown={onDropzoneKeyDown}>
           <input ref={inputRef} type="file" onChange={(event: ChangeEvent<HTMLInputElement>) => choose(event.target.files?.[0])} hidden />
-          <span className="upload-icon">↑</span><strong>{file ? file.name : '拖拽文件到这里'}</strong><small>{file ? `${file.type || '未知类型'} · ${fileSize(file.size)}` : '或点击选择 PDF、Office、RTF、XML、CSV、音视频等文件'}</small>
+          <span className="upload-icon">↑</span><strong>{file ? file.name : '拖拽文件到这里'}</strong><small>{file ? `${file.type || '未知类型'} · ${fileSize(file.size)}` : '或点击选择 PDF、图片、Office、RTF、XML、CSV、音视频等文件'}</small>
         </div>
         <SupportedFormats />
         <label>解析目标 <span>可选</span><textarea value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="例如：提取表格并输出 Markdown" rows={3} /></label>
@@ -116,6 +116,7 @@ function SupportedFormats() {
     ['表格', 'XLS · XLSX · XLSM · CSV · TSV'],
     ['演示', 'PPT · PPTX'],
     ['文本与数据', 'TXT · MD · HTML · XML'],
+    ['图片 OCR', 'PNG · JPG · JPEG · WEBP · BMP · TIF · TIFF'],
     ['音频', 'MP3 · WAV · M4A · AAC · FLAC · OGG'],
     ['视频', 'MP4 · MOV · MKV · AVI · WEBM'],
   ]

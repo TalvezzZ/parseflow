@@ -278,6 +278,15 @@ async def parse_text(request: DocumentParseRequest) -> SkillResult:
     return await executor.execute("text.parse", context)
 
 
+@app.post("/api/v1/parse/image", response_model=SkillResult, tags=["解析"])
+async def parse_image(request: DocumentParseRequest) -> SkillResult:
+    """解析一个服务本地可访问的独立图片文件。"""
+    path = Path(request.path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
+    return await executor.execute("image.parse", request.to_context())
+
+
 @app.post("/api/v1/parse/pdf", response_model=SkillResult, tags=["解析"])
 async def parse_pdf(request: PdfParseRequest) -> SkillResult:
     """解析一个服务本地可访问的 PDF 文件。"""

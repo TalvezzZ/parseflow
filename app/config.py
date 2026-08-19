@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     pdf_ocr_max_pages: int = 50
     pdf_ocr_render_scale: float = 2.0
     pdf_ocr_max_page_pixels: int = 20_000_000
+    image_ocr_provider: str = "image.ocr.paddle"
+    image_ocr_enabled: bool = True
+    image_ocr_device: str = "cpu"
+    image_ocr_lang: str = "ch"
+    image_ocr_max_pixels: int = 20_000_000
     word_normal_provider: str = "word.normal.mammoth"
     word_fallback_providers: str = ""
     office_converter_provider: str = "office.convert.libreoffice"
@@ -52,7 +57,7 @@ class Settings(BaseSettings):
     task_callback_timeout_seconds: int = 15
     file_storage_dir: str = "./data/files"
     file_max_size_mb: int = 100
-    file_allowed_suffixes: str = ".pdf,.doc,.docx,.rtf,.xls,.xlsx,.xlsm,.ppt,.pptx,.txt,.md,.markdown,.csv,.tsv,.html,.htm,.xml,.mp3,.wav,.m4a,.aac,.flac,.ogg,.mp4,.mov,.mkv,.avi,.webm"
+    file_allowed_suffixes: str = ".pdf,.doc,.docx,.rtf,.xls,.xlsx,.xlsm,.ppt,.pptx,.txt,.md,.markdown,.csv,.tsv,.html,.htm,.xml,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.mp3,.wav,.m4a,.aac,.flac,.ogg,.mp4,.mov,.mkv,.avi,.webm"
     api_key: str | None = None
     text_max_file_size_mb: int = 20
     text_max_table_rows: int = 100000
