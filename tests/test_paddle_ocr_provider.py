@@ -36,6 +36,41 @@ async def test_paddle_ocr_provider_normalizes_local_result(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_paddle_ocr_provider_enforces_renderer_limits(tmp_path: Path) -> None:
+    source = tmp_path / "scanned.pdf"
+    source.write_bytes(b"%PDF-1.4\n")
+
+    def over_limit_renderer(_: Path, __: int, ___: float, ____: int):
+        raise ValueError("PDF 页数 51 超过 OCR 上限 50")
+
+    result = await PaddleOcrPdfProvider(ocr_factory=FakePaddleOcr, renderer=over_limit_renderer).parse(
+        ParseContext(file=FileInput(file_id="file-1", path=str(source)))
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "ocr_input_limit_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_paddle_ocr_provider_maps_empty_text_to_quality_failure(tmp_path: Path) -> None:
+    source = tmp_path / "scanned.pdf"
+    source.write_bytes(b"%PDF-1.4\n")
+
+    class EmptyOcr:
+        def predict(self, _: str):
+            return [{"rec_texts": [], "rec_scores": [], "rec_boxes": []}]
+
+    result = await PaddleOcrPdfProvider(ocr_factory=EmptyOcr, renderer=fake_renderer).parse(
+        ParseContext(file=FileInput(file_id="file-1", path=str(source)))
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "quality_insufficient"
+
+
+@pytest.mark.asyncio
 async def test_paddle_ocr_provider_reports_missing_dependency(tmp_path: Path) -> None:
     source = tmp_path / "scanned.pdf"
     source.write_bytes(b"%PDF-1.4\n")

@@ -97,6 +97,51 @@ async def test_manager_limits_queue_and_cancels_queued_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_manager_records_timeout_and_finishes_task() -> None:
+    async def runner(_: TaskRecord) -> dict:
+        await asyncio.sleep(0.2)
+        return {"status": "success"}
+
+    manager = InMemoryTaskManager(runner, default_timeout_seconds=0)
+    try:
+        submitted = await manager.submit("skill.execute", {}, None, None)
+        for _ in range(50):
+            record = manager.get(submitted.task_id)
+            if record and record.status == "failed":
+                break
+            await asyncio.sleep(0.01)
+        record = manager.get(submitted.task_id)
+        assert record is not None
+        assert record.status == "failed"
+        assert record.error is not None
+        assert record.error["code"] == "task_timeout"
+        assert record.finished_at is not None
+        assert record.duration_ms is not None
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_manager_cleans_expired_terminal_tasks() -> None:
+    async def runner(_: TaskRecord) -> dict:
+        return {"status": "success"}
+
+    manager = InMemoryTaskManager(runner, result_ttl_seconds=0)
+    try:
+        submitted = await manager.submit("skill.execute", {}, None, None)
+        for _ in range(50):
+            record = manager.get(submitted.task_id)
+            if record and record.status == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.01)
+        manager._cleanup_expired()
+        assert manager.get(submitted.task_id) is None
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
 async def test_callback_non_200_does_not_change_execution_status(monkeypatch: pytest.MonkeyPatch) -> None:
     received: list[dict] = []
 

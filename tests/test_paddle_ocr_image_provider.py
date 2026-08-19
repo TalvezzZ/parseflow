@@ -89,6 +89,38 @@ async def test_paddle_ocr_image_provider_reports_empty_result(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_paddle_ocr_image_provider_rejects_corrupted_image(tmp_path: Path) -> None:
+    source = tmp_path / "corrupted.png"
+    source.write_bytes(b"not a valid image")
+
+    result = await PaddleOcrImageProvider(ocr_factory=FakePaddleOcr).parse(
+        ParseContext(file=FileInput(file_id="file-1", path=str(source)))
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "invalid_image"
+
+
+@pytest.mark.asyncio
+async def test_paddle_ocr_image_provider_maps_inference_exception(tmp_path: Path) -> None:
+    source = make_image(tmp_path)
+
+    class FailingPaddleOcr:
+        def predict(self, _: str):
+            raise RuntimeError("inference failed")
+
+    result = await PaddleOcrImageProvider(ocr_factory=FailingPaddleOcr).parse(
+        ParseContext(file=FileInput(file_id="file-1", path=str(source)))
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "provider_failed"
+    assert result.error.retryable is True
+
+
+@pytest.mark.asyncio
 async def test_paddle_ocr_image_provider_reports_missing_source() -> None:
     result = await PaddleOcrImageProvider(ocr_factory=FakePaddleOcr).parse(
         ParseContext(file=FileInput(file_id="file-1", path="/tmp/no-such-image.png"))

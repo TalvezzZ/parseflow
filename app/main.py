@@ -244,7 +244,7 @@ async def cancel_task(task_id: str) -> TaskRecord:
     if task is None:
         raise HTTPException(status_code=404, detail=f"未找到任务: {task_id}")
     if task.status != "cancelled":
-        raise HTTPException(status_code=409, detail="仅允许取消排队中的任务")
+        raise HTTPException(status_code=409, detail={"code": "task_not_cancellable", "message": "仅允许取消排队中的任务"})
     return task
 
 

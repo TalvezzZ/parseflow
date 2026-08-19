@@ -36,6 +36,9 @@ class RuleBasedPlanner:
         ".mp3": ("audio.prepare", "识别为音频，当前执行媒体预处理"),
         ".wav": ("audio.prepare", "识别为音频，当前执行媒体预处理"),
         ".m4a": ("audio.prepare", "识别为音频，当前执行媒体预处理"),
+        ".aac": ("audio.prepare", "识别为音频，当前执行媒体预处理"),
+        ".flac": ("audio.prepare", "识别为音频，当前执行媒体预处理"),
+        ".ogg": ("audio.prepare", "识别为音频，当前执行媒体预处理"),
         ".mp4": ("video.prepare", "识别为视频，当前执行媒体预处理"),
         ".mov": ("video.prepare", "识别为视频，当前执行媒体预处理"),
         ".mkv": ("video.prepare", "识别为视频，当前执行媒体预处理"),
@@ -52,7 +55,8 @@ class RuleBasedPlanner:
         if route is None:
             raise ValueError(f"当前系统无法自动规划该文件格式: {suffix or '<无后缀>'}")
         skill_name, reason = route
-        self.registry.get(skill_name)
+        if skill_name != "office.parse_pipeline":
+            self.registry.get(skill_name)
         warnings = []
         if skill_name in {"audio.prepare", "video.prepare"}:
             warnings.append("当前未配置 ASR Provider，将完成媒体预处理但不会生成语音转录文本。")

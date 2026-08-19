@@ -89,6 +89,25 @@ async def test_scanned_pdf_without_ocr_provider_returns_setup_error() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("pdf_type, ocr_recommended", [("text_based", True), ("image_based", False), ("mixed", False), ("unknown", False)])
+async def test_ocr_requiring_pdf_types_use_ocr_provider(pdf_type: str, ocr_recommended: bool) -> None:
+    normal = FakeProvider("normal.test", "normal")
+    ocr = FakeProvider("ocr.test", "ocr")
+
+    class Inspection(PdfInspector):
+        async def inspect(self, context: ParseContext) -> PdfInspectionResult:
+            return PdfInspectionResult(pdf_type=pdf_type, ocr_recommended=ocr_recommended)
+
+    result = await PdfParseSkill(
+        inspector=Inspection(), providers=ProviderRegistry([normal, ocr]), normal_provider="normal.test", ocr_provider="ocr.test"
+    ).execute(make_context())
+
+    assert result.status == "success"
+    assert normal.called == 0
+    assert ocr.called == 1
+
+
+@pytest.mark.asyncio
 async def test_failed_primary_provider_falls_back() -> None:
     primary = FakeProvider("normal.primary", "normal", status="failed")
     fallback = FakeProvider("normal.fallback", "normal")
