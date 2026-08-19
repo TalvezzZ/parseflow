@@ -1,0 +1,72 @@
+/* Visual layer for the Parse Agent workspace. */
+:root { color: #172b3a; background: #f4f8fb; }
+body { min-width: 320px; background: radial-gradient(circle at 12% 0%, #e7f5fa 0, transparent 27rem), radial-gradient(circle at 95% 15%, #e8f4ee 0, transparent 25rem), #f4f8fb; }
+.app-shell { max-width: 1480px; padding: 34px 32px 64px; }
+.app-header { position: relative; display: flex; gap: 28px; align-items: center; margin-bottom: 28px; padding: 28px 30px; overflow: hidden; color: #f7fcfe; border: 1px solid rgba(255,255,255,.16); border-radius: 22px; background: linear-gradient(118deg, #123d59, #126f91 54%, #1d856f); box-shadow: 0 18px 42px rgba(21, 74, 99, .18); }
+.app-header::after { position: absolute; top: -120px; right: 2%; width: 330px; height: 330px; content: ''; border: 1px solid rgba(255,255,255,.14); border-radius: 50%; box-shadow: 0 0 0 42px rgba(255,255,255,.04), 0 0 0 84px rgba(255,255,255,.03); }
+.brand-mark { display: grid; flex: 0 0 auto; width: 50px; height: 50px; place-items: center; color: #0f6888; font: 700 26px 'DM Mono', monospace; border-radius: 16px; background: #e8fbff; box-shadow: inset 0 -3px 0 rgba(10, 109, 141, .16); }
+.app-header > div { position: relative; z-index: 1; }
+.app-header .eyebrow { margin-bottom: 5px; color: #bce7f2; }
+.app-header h1 { margin: 0 0 5px; font-size: clamp(25px, 3vw, 34px); letter-spacing: -.035em; }
+.app-header .subtitle { color: #d6ebf1; }
+.app-header .service { position: relative; z-index: 1; margin-left: auto; color: #e9fff4; border-color: rgba(216,255,235,.25); background: rgba(12, 48, 60, .23); backdrop-filter: blur(8px); }
+.workspace-grid { gap: 26px; align-items: start; }
+.upload-panel, .content-panel { border: 1px solid rgba(202, 220, 229, .9); border-radius: 20px; box-shadow: 0 16px 36px rgba(33, 70, 88, .08); }
+.upload-panel { position: sticky; top: 22px; overflow: hidden; padding: 0 24px 22px; }
+.upload-panel > h2 { margin: 0 -24px 18px; padding: 20px 24px 15px; font-size: 19px; border-bottom: 1px solid #e7eef2; }
+.upload-panel > h2::before { display: inline-grid; width: 26px; height: 26px; margin-right: 9px; place-items: center; content: '1'; color: #0e769a; font: 600 12px 'DM Mono', monospace; vertical-align: 2px; border-radius: 50%; background: #e2f4f9; }
+.dropzone { min-height: 208px; border-color: #9ec9d8; background: linear-gradient(145deg, #f8fcfd, #eff8fb); }
+.dropzone:hover { transform: translateY(-2px); box-shadow: 0 10px 22px rgba(22, 115, 147, .11); }
+.upload-icon { width: 44px; height: 44px; color: #0a789f; font-size: 25px; box-shadow: 0 5px 12px rgba(14, 127, 164, .12); }
+.formats-guide { margin-top: 18px; padding: 15px; border: 1px solid #dceaf0; border-radius: 13px; background: linear-gradient(145deg, #f7fbfc, #f0f8fa); }
+.formats-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.formats-heading h3 { margin: 0; color: #244555; font-size: 14px; }
+.formats-heading > span { padding: 4px 8px; color: #16758f; font: 600 10px 'DM Mono', monospace; letter-spacing: .04em; border-radius: 999px; background: #dff3f7; }
+.formats-kicker { margin: 0 0 3px; color: #6f94a3; font: 600 9px 'DM Mono', monospace; letter-spacing: .09em; }
+.format-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.format-item { min-width: 0; padding: 8px 9px; border: 1px solid rgba(207, 225, 232, .9); border-radius: 9px; background: rgba(255, 255, 255, .76); }
+.format-item strong { display: block; margin-bottom: 3px; color: #386071; font-size: 11px; }
+.format-item span { display: block; color: #66808d; font: 500 9px/1.45 'DM Mono', monospace; overflow-wrap: anywhere; }
+.formats-note { margin: 11px 1px 0; color: #718894; font-size: 11px; line-height: 1.55; }
+.upload-panel label { margin-top: 20px; }
+.primary { min-height: 52px; border-radius: 12px; background: linear-gradient(120deg, #0c6d8e, #1184a7); box-shadow: 0 9px 17px rgba(15, 112, 145, .21); transition: transform .18s, box-shadow .18s; }
+.primary:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 12px 24px rgba(15, 112, 145, .27); }
+.hint { margin: 24px -24px -22px; padding: 18px 24px; border-top: 1px solid #e6eef2; background: #f8fbfc; }
+.content-panel { min-height: 660px; padding: 28px 32px; }
+.task-heading { padding-bottom: 22px; border-bottom: 1px solid #e4edf1; }
+.task-heading h2 { font-size: 27px; letter-spacing: -.03em; }
+.dropzone:focus-visible, .tabs button:focus-visible { outline: 3px solid #70c9e2; outline-offset: 3px; }
+.task-meta { display: flex; align-items: center; gap: 12px; }
+.duration { display: grid; gap: 2px; min-width: 86px; padding: 8px 11px; text-align: right; border: 1px solid #dce7ed; border-radius: 10px; background: #f8fbfc; box-shadow: 0 4px 10px rgba(25, 82, 102, .04); }
+.duration small { color: #718390; font-size: 11px; }
+.duration strong { color: #1d566d; font: 500 13px 'DM Mono', monospace; }
+.tables { display: grid; gap: 18px; }
+.table-wrap { overflow: hidden; border: 1px solid #dce7ed; border-radius: 14px; background: #fff; box-shadow: 0 8px 24px rgba(30, 67, 87, .06); }
+.table-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; padding: 14px 16px; color: #2a4657; font-size: 13px; font-weight: 700; border-bottom: 1px solid #dce7ed; background: linear-gradient(135deg, #f2f9fb, #f8fbfc); }
+.table-title span { color: #617887; font: 500 11px 'DM Mono', monospace; letter-spacing: .04em; }
+.table-scroll { overflow: auto; max-height: 620px; }
+.table-wrap table { width: 100%; border-spacing: 0; border-collapse: separate; font-size: 13px; line-height: 1.55; }
+.table-wrap th, .table-wrap td { min-width: 110px; max-width: 360px; padding: 10px 13px; overflow-wrap: anywhere; vertical-align: top; text-align: left; white-space: pre-wrap; border-right: 1px solid #e4edf1; border-bottom: 1px solid #e4edf1; }
+.table-wrap th { position: sticky; top: 0; z-index: 1; color: #174e66; font-weight: 700; background: #e8f4f7; box-shadow: 0 1px 0 #cfe1e8; }
+.table-wrap tbody tr:nth-child(even) td { background: #f8fbfc; }
+.table-wrap tbody tr:hover td { background: #eef8fb; }
+.table-wrap th:last-child, .table-wrap td:last-child { border-right: 0; }
+.table-wrap tbody tr:last-child td { border-bottom: 0; }
+.table-row-number { width: 52px; min-width: 52px !important; padding-right: 8px !important; padding-left: 8px !important; color: #78909c !important; font: 500 11px 'DM Mono', monospace !important; text-align: center !important; }
+.table-note { display: block; padding: 10px 16px; color: #718390; font-size: 12px; border-top: 1px solid #e4edf1; background: #fcfdfd; }
+.timeline { margin: 26px 0; padding: 18px 6px; border: 1px solid #e6eef2; border-radius: 13px; background: #fbfdfe; }
+.plan-card { border-radius: 14px; box-shadow: 0 7px 18px rgba(35, 74, 93, .04); }
+.tabs { position: sticky; top: 0; z-index: 3; margin-top: 28px; padding: 4px 0 0; background: #fff; box-shadow: 0 9px 12px -13px rgba(27, 65, 81, .65); }
+.tabs button { padding: 13px 14px; }
+.tabs button.active { color: #08779b; border-bottom-width: 3px; }
+.overview { gap: 14px; }
+.stat { min-height: 92px; padding: 17px; border-color: #e0ebf0; border-radius: 14px; background: linear-gradient(145deg, #fbfdfe, #f3f8fa); }
+.stat strong { margin-top: 7px; font-size: 19px; }
+.overview section { margin-top: 10px; padding: 22px; border: 1px solid #e3edf1; border-radius: 14px; background: #fbfdfe; }
+.empty { padding: 80px 30px; }
+.empty-mark { box-shadow: 0 12px 24px rgba(18, 120, 154, .15); }
+.text-preview, .json { border: 1px solid #e0ebf0; border-radius: 13px; background: #f9fcfd; }
+.artifact { transition: transform .18s, border-color .18s; }
+.artifact:hover { transform: translateY(-2px); border-color: #abd1dd; }
+@media (max-width: 850px) { .app-shell { padding: 18px 16px 44px; } .app-header { padding: 22px; } .app-header .service { display: none; } .workspace-grid { grid-template-columns: 1fr; } .upload-panel { position: static; } .content-panel { min-height: auto; padding: 22px 18px; } .task-heading { align-items: flex-start; gap: 14px; } .task-meta { flex-wrap: wrap; } .timeline { overflow-x: auto; } .tabs { overflow-x: auto; white-space: nowrap; } }
+@media (max-width: 500px) { .app-header { gap: 14px; padding: 20px; } .brand-mark { width: 42px; height: 42px; font-size: 21px; } .app-header h1 { font-size: 24px; } .task-heading { flex-direction: column; } .task-meta { width: 100%; justify-content: space-between; } .format-list { grid-template-columns: 1fr; } }

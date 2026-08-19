@@ -1,0 +1,26 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local configuration and operating-system files
+.env
+.DS_Store
+
+# Local IDE settings
+.idea/
+*.iml
+
+# Runtime uploads and generated parse artifacts
+# Keep example fixtures under tests/fixtures/ or examples/ instead.
+data/
+
+# Frontend dependencies and generated build outputs
+web/node_modules/
+web/dist/
+*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+
