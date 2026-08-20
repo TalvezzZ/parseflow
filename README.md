@@ -84,6 +84,45 @@ Useful backend URLs:
 - Health check: `http://127.0.0.1:8000/health`
 - Available Skills: `http://127.0.0.1:8000/api/v1/skills`
 
+## Docker deployment
+
+ParseFlow uses one production Docker image: it packages the FastAPI backend and built React workbench together. Inside the container, Nginx serves the frontend and proxies `/api` to the local FastAPI process.
+
+```bash
+# Optional: copy settings and set a strong API key before Internet exposure.
+cp .env.example .env
+# Edit .env: set API_KEY=your-long-random-secret
+
+# Build and start the full local parsing stack.
+docker compose up -d --build
+
+# Verify both services and open the workbench.
+docker compose ps
+curl http://127.0.0.1:8080/health
+```
+
+Open `http://127.0.0.1:8080`. Change the published port with `PARSEFLOW_PORT`, for example `PARSEFLOW_PORT=9000 docker compose up -d`.
+
+The production API image includes LibreOffice, FFmpeg/FFprobe, CPU PaddleOCR, and Chinese fonts, so it supports the formats advertised by ParseFlow. It persists two named volumes:
+
+- `parseflow-data` — uploaded files and generated artifacts;
+- `parseflow-models` — downloaded PaddleOCR models. The first OCR request needs outbound access to download models; later requests reuse this volume.
+
+Useful operations:
+
+```bash
+# Follow combined web and API logs.
+docker compose logs -f parseflow
+
+# Stop containers without deleting uploaded documents or OCR models.
+docker compose down
+
+# Stop and remove all ParseFlow runtime data (destructive).
+docker compose down -v
+```
+
+> **Deployment notes:** Keep Uvicorn at one worker: the current task queue and task status are in process memory. Set `API_KEY` before exposing the service outside a trusted network; the Nginx proxy forwards it internally for the browser workbench. The direct parser endpoints accept server-local paths, so do not mount sensitive host directories into the API container. For public, untrusted use, also restrict task callback targets at the network layer because callback URLs are caller-controlled.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and adjust values as needed. Important settings include:

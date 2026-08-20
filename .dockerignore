@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+.env
+.idea
+__pycache__
+.pytest_cache
+*.py[cod]
+data
+web/node_modules
+web/dist
+web/*.tsbuildinfo
+coverage
+htmlcov
+.DS_Store

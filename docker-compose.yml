@@ -1,0 +1,37 @@
+services:
+  parseflow:
+    build:
+      context: .
+      target: full
+    image: parseflow:0.6.0
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: production
+      FILE_STORAGE_DIR: /data/files
+      # Set API_KEY in .env before exposing the service outside a trusted network.
+      # Nginx forwards it internally so the browser workbench remains usable.
+      API_KEY: ${API_KEY:-}
+    ports:
+      - "${PARSEFLOW_PORT:-8080}:80"
+    volumes:
+      - parseflow-data:/data
+      - parseflow-models:/home/parseflow/.paddlex
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+volumes:
+  parseflow-data:
+    name: parseflow-data
+  parseflow-models:
+    name: parseflow-models
