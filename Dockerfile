@@ -24,8 +24,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 COPY --from=ghcr.io/astral-sh/uv:0.6.16 /uv /uvx /bin/
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+# Debian mirrors can transiently fail while fetching LibreOffice's large dependency set.
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
         ffmpeg \
         gettext-base \
         libreoffice-core \
