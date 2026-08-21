@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     file_max_size_mb: int = 100
     file_allowed_suffixes: str = ".pdf,.doc,.docx,.rtf,.xls,.xlsx,.xlsm,.ppt,.pptx,.txt,.md,.markdown,.csv,.tsv,.html,.htm,.xml,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.mp3,.wav,.m4a,.aac,.flac,.ogg,.mp4,.mov,.mkv,.avi,.webm"
     api_key: str | None = None
+    # Remote MCP exposes server-local file paths; require API_KEY when enabled.
+    mcp_http_enabled: bool = False
+    # Comma-separated Host headers accepted by MCP DNS-rebinding protection.
+    mcp_allowed_hosts: str = "localhost,127.0.0.1,localhost:*,127.0.0.1:*,[::1]:*"
     text_max_file_size_mb: int = 20
     text_max_table_rows: int = 100000
     text_max_table_columns: int = 1000

@@ -1,7 +1,12 @@
 """Parse Agent MCP Server，默认通过 stdio 提供工具。"""
 
 from app.documents.models import FileInput, OfficePipelineRequest, ParseContext
-from app.main import executor, pipeline, planner, task_manager, registry
+
+
+def runtime():
+    """Import runtime singletons lazily to support both stdio and HTTP mounting."""
+    from app.main import executor, pipeline, planner, task_manager, registry
+    return executor, pipeline, planner, task_manager, registry
 
 try:
     from mcp.server import MCPServer
@@ -15,12 +20,14 @@ mcp = MCPServer("parse-agent", version="0.6.0")
 @mcp.tool()
 def list_skills() -> list[dict]:
     """列出可用的顶层 Skill 及其能力。"""
+    *_, registry = runtime()
     return registry.list_manifests()
 
 
 @mcp.tool()
 async def execute_skill(skill_name: str, file_id: str, path: str, filename: str = "", mime_type: str = "") -> dict:
     """执行一个顶层 Skill；不会直接暴露底层 Provider。"""
+    executor, _, _, _, _ = runtime()
     context = ParseContext(file=FileInput(file_id=file_id, path=path, filename=filename or None, mime_type=mime_type or None))
     result = await executor.execute(skill_name, context)
     return result.model_dump()
@@ -29,12 +36,14 @@ async def execute_skill(skill_name: str, file_id: str, path: str, filename: str 
 @mcp.tool()
 def preview_parse_plan(path: str, goal: str = "") -> dict:
     """预览规则计划，不执行文件解析；调用方可据此理解自动路由。"""
+    _, _, planner, _, _ = runtime()
     return planner.create(path, goal or None).model_dump(mode="json")
 
 
 @mcp.tool()
 async def submit_parse_intent(file_id: str, path: str, goal: str = "", data_id: str = "", callback: str = "") -> dict:
     """提交自动规划任务；MCP 客户端提供可访问的本地文件路径。"""
+    _, _, _, task_manager, _ = runtime()
     request = {"file_id": file_id, "path": path, "goal": goal or None}
     submitted = await task_manager.submit("parse.intent", request, data_id or None, callback or None)
     return submitted.model_dump(mode="json")
@@ -58,6 +67,7 @@ async def parse_office_pipeline(
         output_dir=output_dir or None,
         timeout_seconds=timeout_seconds,
     )
+    _, pipeline, _, _, _ = runtime()
     result = await pipeline.execute(request.to_context())
     return result.model_dump()
 

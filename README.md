@@ -178,13 +178,74 @@ The generated frontend files are written to `web/dist/` and are not committed.
 
 ### MCP server
 
-Start the MCP stdio server with:
+ParseFlow supports two MCP transports using the same tools and shared parsing runtime.
+
+#### Local stdio MCP
+
+Start the local stdio server with:
 
 ```bash
 uv run parse-agent-mcp
 ```
 
-It exposes `list_skills`, `execute_skill`, and `parse_office_pipeline`.
+A local client configuration is:
+
+```json
+{
+  "mcpServers": {
+    "parseflow": {
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/parseflow", "run", "parse-agent-mcp"]
+    }
+  }
+}
+```
+
+#### Docker / remote Streamable HTTP MCP
+
+The Docker service can expose an authenticated MCP endpoint at:
+
+```text
+http://your-host:8080/mcp/
+```
+
+In the Docker `.env`, configure a strong key and explicitly enable MCP. `MCP_ALLOWED_HOSTS` must include the Host header used by clients; use the public hostname without a scheme, and include a port only when it is present in that Host header.
+
+```env
+API_KEY=replace-with-a-long-random-secret
+MCP_HTTP_ENABLED=true
+MCP_ALLOWED_HOSTS=parseflow.example.com
+```
+
+For local Docker testing on the default port, use:
+
+```env
+API_KEY=replace-with-a-long-random-secret
+MCP_HTTP_ENABLED=true
+MCP_ALLOWED_HOSTS=localhost,127.0.0.1
+```
+
+Restart the service after changing the settings:
+
+```bash
+docker compose up -d
+curl -H 'X-API-Key: replace-with-a-long-random-secret' http://127.0.0.1:8080/mcp/
+```
+
+Configure a remote MCP client with the endpoint and request header. The exact configuration field varies by client; the transport contract is:
+
+```json
+{
+  "url": "http://127.0.0.1:8080/mcp/",
+  "headers": {
+    "X-API-Key": "replace-with-a-long-random-secret"
+  }
+}
+```
+
+The endpoint is disabled by default and returns `404` until `MCP_HTTP_ENABLED=true`. It refuses to start MCP requests without `API_KEY`, even if REST API authentication is otherwise optional. This is deliberate: MCP tools accept server-local file paths. The remote endpoint runs inside the same FastAPI process as the web UI and REST API, so `submit_parse_intent` shares the same in-memory task state and task IDs with the workbench.
+
+Available tools are `list_skills`, `preview_parse_plan`, `execute_skill`, `submit_parse_intent`, and `parse_office_pipeline`.
 
 ## Architecture
 

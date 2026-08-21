@@ -8,7 +8,7 @@ export API_KEY="$envs"
 envsubst '${API_KEY}' < /etc/parseflow/nginx.conf.template > /etc/nginx/conf.d/parseflow.conf
 
 # Nginx needs root to bind port 80. The FastAPI process itself runs unprivileged.
-su -s /bin/sh -c 'cd /app && exec uv run --no-sync uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1' parseflow &
+su -s /bin/sh -c 'cd /app && exec /app/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1' parseflow &
 api_pid=$!
 
 nginx -g 'daemon off;' &

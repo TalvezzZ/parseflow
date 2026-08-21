@@ -95,12 +95,18 @@ task_manager = InMemoryTaskManager(
     callback_timeout_seconds=settings.task_callback_timeout_seconds,
 )
 
+# Imported after the shared runtime singletons are ready; MCP tool handlers
+# import these lazily so the standalone stdio entry point remains supported.
+from app.mcp_server import mcp
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    try:
-        yield
-    finally:
-        await task_manager.stop()
+    async with mcp.session_manager.run():
+        try:
+            yield
+        finally:
+            await task_manager.stop()
 
 
 app = FastAPI(title="Parse Agent", version="0.6.0", description="基于 LangChain 和 Skill 的文档解析 Agent", lifespan=lifespan)
@@ -117,7 +123,12 @@ app.add_middleware(
 async def observe_and_authenticate(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID") or uuid4().hex
     started = perf_counter()
-    if settings.api_key and request.url.path.startswith("/api/") and request.headers.get("X-API-Key") != settings.api_key:
+    is_remote_mcp = request.url.path == "/mcp" or request.url.path.startswith("/mcp/")
+    if is_remote_mcp and not settings.mcp_http_enabled:
+        response = JSONResponse(status_code=404, content={"detail": {"code": "mcp_disabled", "message": "远程 MCP 未启用。"}})
+    elif is_remote_mcp and not settings.api_key:
+        response = JSONResponse(status_code=503, content={"detail": {"code": "mcp_api_key_required", "message": "远程 MCP 必须配置 API_KEY。"}})
+    elif (request.url.path.startswith("/api/") or is_remote_mcp) and settings.api_key and request.headers.get("X-API-Key") != settings.api_key:
         response = JSONResponse(status_code=401, content={"detail": {"code": "unauthorized", "message": "缺少或无效的 API Key。"}})
     else:
         response = await call_next(request)
@@ -126,6 +137,22 @@ async def observe_and_authenticate(request: Request, call_next):
     http_metrics.record(response.status_code, duration_ms)
     logger.info("http_request method=%s path=%s status=%s duration_ms=%s request_id=%s", request.method, request.url.path, response.status_code, duration_ms, request_id)
     return response
+
+
+# Streamable HTTP MCP shares this exact process, registry, and in-memory task
+# manager with the REST API and web workbench. Authentication/enablement is
+# enforced by observe_and_authenticate before requests reach this mounted app.
+from mcp.server.transport_security import TransportSecuritySettings
+mcp_allowed_hosts = [item.strip() for item in settings.mcp_allowed_hosts.split(",") if item.strip()]
+app.mount(
+    "/mcp",
+    mcp.streamable_http_app(
+        streamable_http_path="/",
+        stateless_http=True,
+        transport_security=TransportSecuritySettings(allowed_hosts=mcp_allowed_hosts),
+    ),
+    name="mcp",
+)
 
 
 @app.get("/health", tags=["系统"])

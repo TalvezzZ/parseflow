@@ -1,5 +1,7 @@
 services:
   parseflow:
+    # PaddleOCR's published Linux CPU wheel requires amd64.
+    platform: linux/amd64
     build:
       context: .
       target: full
@@ -14,6 +16,10 @@ services:
       # Set API_KEY in .env before exposing the service outside a trusted network.
       # Nginx forwards it internally so the browser workbench remains usable.
       API_KEY: ${API_KEY:-}
+      # Explicitly opt in only when a remote MCP client is configured.
+      MCP_HTTP_ENABLED: ${MCP_HTTP_ENABLED:-false}
+      # Comma-separated public Host headers accepted by MCP transport security.
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,localhost:*,127.0.0.1:*}
     ports:
       - "${PARSEFLOW_PORT:-8080}:80"
     volumes:
