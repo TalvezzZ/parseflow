@@ -20,6 +20,7 @@ from app.tasks.manager import InMemoryTaskManager, TaskQueueFullError
 from app.tasks.models import TaskMetrics, TaskOfficePipelineRequest, TaskRecord, TaskSkillRequest, TaskSubmitResponse
 from app.skills.registry import create_default_registry
 from app.skills.office.adapters.libreoffice import LibreOfficeProvider
+from app.version import __version__
 
 
 settings = get_settings()
@@ -82,7 +83,8 @@ async def run_parse_intent(record: TaskRecord) -> dict:
     step.result_summary = {"document_type": document.get("document_type"), "tables": len(document.get("tables", [])), "images": len(document.get("images", []))}
     plan.status = "completed" if step.status in {"succeeded", "partial"} else "failed"
     record.plan = plan.model_dump(mode="json")
-    return {"status": result["status"], "plan": record.plan, "result": result, "warnings": plan.warnings, "error": result.get("error")}
+    return {"status": result["status"], "file_id": str(request["file_id"]), "plan": record.plan, "result": result,
+            "warnings": plan.warnings, "error": result.get("error")}
 
 
 task_manager = InMemoryTaskManager(
@@ -109,7 +111,7 @@ async def lifespan(_: FastAPI):
             await task_manager.stop()
 
 
-app = FastAPI(title="Parse Agent", version="0.6.0", description="基于 LangChain 和 Skill 的文档解析 Agent", lifespan=lifespan)
+app = FastAPI(title="Parse Agent", version=__version__, description="基于 LangChain 和 Skill 的文档解析 Agent", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],

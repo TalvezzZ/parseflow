@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.skills.text_formats import TEXT_SUFFIXES
+
 
 class Settings(BaseSettings):
     """应用配置。"""
@@ -57,7 +59,12 @@ class Settings(BaseSettings):
     task_callback_timeout_seconds: int = 15
     file_storage_dir: str = "./data/files"
     file_max_size_mb: int = 100
-    file_allowed_suffixes: str = ".pdf,.doc,.docx,.rtf,.xls,.xlsx,.xlsm,.ppt,.pptx,.txt,.md,.markdown,.csv,.tsv,.html,.htm,.xml,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff,.mp3,.wav,.m4a,.aac,.flac,.ogg,.mp4,.mov,.mkv,.avi,.webm"
+    file_allowed_suffixes: str = ",".join(sorted({
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx",
+        ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff",
+        ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg",
+        ".mp4", ".mov", ".mkv", ".avi", ".webm",
+    } | set(TEXT_SUFFIXES)))
     api_key: str | None = None
     # Remote MCP exposes server-local file paths; require API_KEY when enabled.
     mcp_http_enabled: bool = False
@@ -66,6 +73,8 @@ class Settings(BaseSettings):
     text_max_file_size_mb: int = 20
     text_max_table_rows: int = 100000
     text_max_table_columns: int = 1000
+    text_max_xml_nodes: int = 100000
+    text_max_xml_depth: int = 128
     rtf_routing_mode: Literal["auto", "direct", "convert"] = "auto"
     rtf_direct_max_complexity_score: int = 5
     rtf_direct_max_size_mb: int = 2

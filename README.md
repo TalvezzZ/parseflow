@@ -11,7 +11,7 @@ ParseFlow accepts a single file, automatically selects an appropriate parsing wo
 - **Structured results** — normalized document model with blocks, tables, images, Markdown, plain text, provenance, warnings, and artifacts.
 - **Safe spreadsheet handling** — XLSX/XLSM semantic-cell scanning avoids traversing oversized, style-polluted used ranges.
 - **Local upload boundaries** — controlled local storage, file-size and extension limits, optional `X-API-Key` authentication, and task metrics.
-- **Developer integrations** — REST API, asynchronous task status, callbacks, and an MCP stdio server.
+- **Developer integrations** — REST API, asynchronous task status, callbacks, and MCP over local stdio or authenticated Streamable HTTP.
 
 ## Supported formats
 
@@ -21,7 +21,7 @@ ParseFlow accepts a single file, automatically selects an appropriate parsing wo
 | Images | PNG, JPG, JPEG, WEBP, BMP, TIF, TIFF | Optional local PaddleOCR extracts text, Markdown, bounding boxes, and confidence from standalone images |
 | Spreadsheets | XLS, XLSX, XLSM, CSV, TSV | Table and semantic cell extraction |
 | Presentations | PPT, PPTX | Slide text, tables, and images |
-| Text & structured data | TXT, MD, Markdown, HTML, HTM, XML | Text extraction; XML uses safe structured extraction |
+| Text & structured data | TXT, MD, Markdown, HTML, HTM, XML, JSON, YAML, YML, INI, CFG, CONF, LOG, SQL, JS, TS, CSS | Specialized HTML/XML extraction where available; other allowlisted text formats preserve their source |
 | Audio | MP3, WAV, M4A, AAC, FLAC, OGG | Metadata probing and audio normalization; no ASR yet |
 | Video | MP4, MOV, MKV, AVI, WEBM | Metadata probing, audio extraction, and embedded-subtitle export when available; no ASR yet |
 
@@ -246,6 +246,17 @@ Configure a remote MCP client with the endpoint and request header. The exact co
 The endpoint is disabled by default and returns `404` until `MCP_HTTP_ENABLED=true`. It refuses to start MCP requests without `API_KEY`, even if REST API authentication is otherwise optional. This is deliberate: MCP tools accept server-local file paths. The remote endpoint runs inside the same FastAPI process as the web UI and REST API, so `submit_parse_intent` shares the same in-memory task state and task IDs with the workbench.
 
 Available tools are `list_skills`, `preview_parse_plan`, `execute_skill`, `submit_parse_intent`, and `parse_office_pipeline`.
+
+## Version roadmap
+
+The active roadmap and detailed release plans are maintained in:
+
+- [`docs/roadmap.md`](docs/roadmap.md) — current baseline, confirmed architecture decisions, and release sequence;
+- [`docs/plan-0.7.1.md`](docs/plan-0.7.1.md) — current capability cleanup;
+- [`docs/plan-0.8.0.md`](docs/plan-0.8.0.md) — upload-only asynchronous API and local file task persistence;
+- [`docs/plan-0.8.1.md`](docs/plan-0.8.1.md) — security and deployment hardening;
+- [`docs/plan-0.9.0.md`](docs/plan-0.9.0.md) — task center, frontend tests, accessibility, and observability;
+- [`docs/plan-1.0.0.md`](docs/plan-1.0.0.md) — stable API, MCP, data, and release contracts.
 
 ## Architecture
 

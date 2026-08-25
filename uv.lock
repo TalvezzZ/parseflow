@@ -1881,8 +1881,8 @@ wheels = [
 
 [[package]]
 name = "parse-agent"
-version = "0.6.0"
-source = { virtual = "." }
+version = "0.7.1"
+source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "defusedxml" },

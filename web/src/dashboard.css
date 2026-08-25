@@ -69,8 +69,17 @@ body { min-width: 320px; background: radial-gradient(circle at 12% 0%, #e7f5fa 0
 .overview section { margin-top: 10px; padding: 22px; border: 1px solid #e3edf1; border-radius: 14px; background: #fbfdfe; }
 .empty { padding: 80px 30px; }
 .empty-mark { box-shadow: 0 12px 24px rgba(18, 120, 154, .15); }
+.result-actions { display: flex; justify-content: flex-end; margin: 14px 0 9px; }
+.copy-result { min-height: 34px; padding: 6px 11px; color: #21647d; font: 600 12px inherit; cursor: pointer; border: 1px solid #cfe2e9; border-radius: 9px; background: #f4fafc; transition: color .18s, border-color .18s, background .18s; }
+.copy-result:hover { color: #075f7d; border-color: #94cbdc; background: #e8f6fa; }
+.copy-result:focus-visible { outline: 3px solid #70c9e2; outline-offset: 3px; }
+.html-preview { width: 100%; min-height: 500px; border: 1px solid #e0ebf0; border-radius: 13px; background: #fff; }
 .text-preview, .json { border: 1px solid #e0ebf0; border-radius: 13px; background: #f9fcfd; }
 .artifact { transition: transform .18s, border-color .18s; }
 .artifact:hover { transform: translateY(-2px); border-color: #abd1dd; }
+.artifact a { margin-left: auto; padding: 7px 11px; color: #08779b; font-size: 12px; font-weight: 700; text-decoration: none; border: 1px solid #b9d9e3; border-radius: 8px; background: #f3fafc; }
+.artifact a:hover { background: #e5f5f9; }
+.artifact a:focus-visible { outline: 3px solid #70c9e2; outline-offset: 2px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 850px) { .app-shell { padding: 18px 16px 44px; } .app-header { padding: 22px; } .app-header .service { display: none; } .workspace-grid { grid-template-columns: 1fr; } .upload-panel { position: static; } .content-panel { min-height: auto; padding: 22px 18px; } .task-heading { align-items: flex-start; gap: 14px; } .task-meta { flex-wrap: wrap; } .timeline { overflow-x: auto; } .tabs { overflow-x: auto; white-space: nowrap; } }
 @media (max-width: 500px) { .app-header { gap: 14px; padding: 20px; } .brand-mark { width: 42px; height: 42px; font-size: 21px; } .app-header h1 { font-size: 24px; } .task-heading { flex-direction: column; } .task-meta { width: 100%; justify-content: space-between; } .format-list { grid-template-columns: 1fr; } }

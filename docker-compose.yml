@@ -5,7 +5,7 @@ services:
     build:
       context: .
       target: full
-    image: parseflow:0.6.0
+    image: parseflow:0.7.1
     restart: unless-stopped
     env_file:
       - path: .env

@@ -13,7 +13,7 @@ from app.skills.media.skill import MediaPrepareSkill
 from app.skills.excel.adapters.openpyxl import OpenpyxlProvider
 from app.skills.ppt.adapters.python_pptx import PythonPptxProvider
 from app.skills.office.document_skill import OfficeDocumentParseSkill
-from app.skills.text import PlainTextProvider, TextParseSkill
+from app.skills.text import PlainTextProvider, RawSourceProvider, TextParseSkill
 from app.skills.rtf import RtfParseSkill
 from app.skills.providers import ProviderRegistry
 from app.config import get_settings
@@ -88,11 +88,16 @@ def create_default_registry() -> SkillRegistry:
         max_sheet_xml_size_mb=settings.excel_max_sheet_xml_size_mb,
     )])
     ppt_providers = ProviderRegistry([PythonPptxProvider()])
-    text_providers = ProviderRegistry([PlainTextProvider(
-        max_file_size_mb=settings.text_max_file_size_mb,
-        max_table_rows=settings.text_max_table_rows,
-        max_table_columns=settings.text_max_table_columns,
-    )])
+    text_providers = ProviderRegistry([
+        PlainTextProvider(
+            max_file_size_mb=settings.text_max_file_size_mb,
+            max_table_rows=settings.text_max_table_rows,
+            max_table_columns=settings.text_max_table_columns,
+            max_xml_nodes=settings.text_max_xml_nodes,
+            max_xml_depth=settings.text_max_xml_depth,
+        ),
+        RawSourceProvider(max_file_size_mb=settings.text_max_file_size_mb),
+    ])
     text_skill = TextParseSkill(providers=text_providers)
     word_skill = WordParseSkill(
         providers=word_providers,

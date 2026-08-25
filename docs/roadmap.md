@@ -1,231 +1,141 @@
-# Parse Agent 迭代版本计划
+# ParseFlow 版本路线图
 
 ## 1. 当前基线
 
-当前项目版本为 `0.3.0`，已具备以下经过真实 API 集成测试验证的能力：
+当前稳定标签为 `v0.7.0`。已具备：
 
-- 文本型 PDF：`pdf.parse`，使用 `pdf-inspector`。
-- DOCX：`word.parse`，使用 Mammoth，输出 HTML、Markdown、纯文本、表格与图片 artifact。
-- Office 转换：`office.convert`，使用 LibreOffice。
-- 已验证的真实链路：PDF 解析、DOCX 解析、DOCX → PDF、DOC → DOCX → 解析。
+- PDF、DOCX、Excel、PowerPoint、RTF、HTML、XML、CSV/TSV、图片、音视频预处理。
+- 扫描 PDF 和独立图片的本地 PaddleOCR。
+- 旧版 Office 通过 LibreOffice 转换后解析。
+- 文件上传、异步任务、规则规划、REST API 和 MCP。
+- React/Vite 解析工作台。
+- 前后端、LibreOffice、FFmpeg 和 OCR 的单容器 Docker 部署。
+- 本地 stdio MCP 与带 API Key 的远程 Streamable HTTP MCP。
 
-当前全量测试基线：`16 passed`。
+当前自动化回归基线为 `124 passed`，Web 生产构建可通过。任务状态仍为进程内存，公开路径型 API、callback 和 Docker 鉴权边界将在后续版本收敛。
 
 ## 2. 产品演进原则
 
 ```text
-先做可验证的文件解析闭环。
-再做格式转换后的自动编排。
-再覆盖 OCR 与复杂文件。
-随后建设任务化、存储和 Agent 编排能力；知识加工暂不纳入当前计划。
+先完成解析能力与结果展示的一致性；
+再把公开入口收敛为“文件流 + 不透明 ID + 异步任务”；
+使用本地文件持久化任务和结果；
+随后完成安全、部署、浏览器测试与可观测性；
+最后冻结 API、MCP 和数据契约并发布 1.0.0。
 ```
 
 每一版本均应满足：
 
-- 有明确输入格式、输出模型与错误码。
-- 有真实文件和 API 集成测试，不只依赖 Mock。
-- 保留实际 Provider、转换步骤、警告和质量指标。
 - 不将未实现能力伪装为成功结果。
+- 公开接口不暴露服务器真实路径。
+- 结果保留实际 Provider、计划、警告、质量指标和 provenance。
+- 新能力有自动化测试和真实运行验证。
+- 版本号、文档、API、MCP 和镜像标签保持一致。
 
-## 3. 版本计划总览
+## 3. 已完成版本
 
-| 版本 | 主题 | 主要交付 | 完成判定 |
+| 版本 | 主题 | 状态 |
+|---|---|---|
+| `0.3.x` | PDF、DOCX 和 Office 转换基础链路 | 已完成 |
+| `0.4.0` | Excel/PPT 解析与旧格式转换 | 已完成 |
+| `0.4.1` | Office Pipeline 与 MCP | 已完成 |
+| `0.4.2` | 音视频预处理 MVP | 已完成 |
+| `0.4.3` | Excel OOXML 与稀疏范围加固 | 已完成 |
+| `0.5.0` | 单进程异步任务 | 已完成 |
+| `0.5.1` | 上传、下载、可观测性和文本格式 | 已完成 |
+| `0.5.2` | XML/RTF 直接解析 | 已完成 |
+| `0.5.3` | RTF 智能路由 | 已完成 |
+| `0.6.0` | 无模型自动规划 | 已完成 |
+| `0.7.0` | PDF/图片 OCR、单容器 Docker、远程 MCP | 已完成 |
+
+历史设计保留在 `docs/plan-*.md` 中。
+
+## 4. 后续版本总览
+
+| 版本 | 主题 | 主要交付 | 发布判定 |
 |---|---|---|---|
-| `0.3.1` | 当前能力加固 | 真实 fixtures、API 测试、错误语义与 artifact 约定 | 三条既有链路可重复真实验收 |
-| `0.4.0` | Excel/PPT 解析 | `excel.parse`、`ppt.parse`、旧格式自动预处理 | ✅ 已完成：原生与 `.xls` 回转真实测试通过；PPTX 原生链路已验证 |
-| `0.4.1` | Office 工作流与 MCP | 统一 PipelineResult、Pipeline API、MCP Tools | ✅ 已完成：转换/解析串联与 MCP 工具测试通过 |
-| `0.4.2` | 音视频预处理 MVP | FFprobe 探测、FFmpeg 音轨提取/标准化、字幕导出 | 音频/视频产出可供后续 ASR 消费的 artifact |
-| `0.4.3` | Excel 解析加固 | OOXML ZIP 预检、语义单元格流式扫描、样式污染防护 | ✅ 已完成：污染 Used Range 真实 API 回归通过 |
-| `0.5.0` | 轻量任务化服务 | 内存 FIFO 队列、并发控制、任务 API、callback | ✅ 已完成：单进程异步任务与回调测试通过 |
-| `0.5.1` | 无模型平台加固 | 文件上传、artifact 下载、可观测性、轻量格式解析 | ✅ 已完成：上传/安全/文本格式真实 API 测试通过 |
-| `0.5.2` | XML/RTF 直接解析 | 安全 XML 结构提取、RTF 正文文本提取 | ✅ 已完成：XML/RTF 真实 API 测试通过 |
-| `0.5.3` | RTF 智能路由 | 复杂度评分、质量 fallback、RTF → DOCX → Word | ✅ 已完成：直接/转换双路径真实 API 测试通过 |
-| `0.6.0` | 无模型自动规划 | 文件即任务、RuleBasedPlanner、任务内 ParsePlan、MCP 计划工具 | ✅ 已完成：单文件自动路由与计划执行测试通过 |
-| `0.7.0` | PDF OCR（后置） | OCR Provider、扫描/混合 PDF 路由与质量校验 | 非文本 PDF 可真实提取内容 |
-| — | 知识加工 | 不纳入当前版本计划 | 待业务需求明确后重新立项 |
+| `0.7.1` | 基础能力收尾 | XML 原文/HTML、通用原文兜底、结果复制、Office 结果兼容、artifact 下载、版本一致性 | 当前功能完整、全量测试与 Web 构建通过 |
+| `0.8.0` | 安全异步解析架构 | 文件流上传、ID 化访问、移除公开 path/output_dir/callback、本地文件任务持久化 | 重启可查任务，公开接口无服务器路径和 callback |
+| `0.8.1` | 安全与部署加固 | Parser 资源预算、容器最小权限、存储清理、Docker smoke CI | 恶意输入、异常恢复和真实镜像门禁通过 |
+| `0.9.0` | 任务中心与产品体验 | 服务端历史、取消/重试、artifact 体验、前端 E2E、可访问性、可观测性 | 核心浏览器流程和运行指标完整 |
+| `1.0.0` | 稳定契约发布 | REST/MCP/任务文件契约、迁移策略、安全基线、自动 Release | API 和数据兼容承诺、完整发布门禁 |
 
-## 4. 0.3.1：当前能力加固
+详细方案：
 
-### 目标
+- [0.7.1：基础能力收尾与一致性修复](plan-0.7.1.md)
+- [0.8.0：文件流、异步任务与本地持久化](plan-0.8.0.md)
+- [0.8.1：安全与部署加固](plan-0.8.1.md)
+- [0.9.0：任务中心与产品体验](plan-0.9.0.md)
+- [1.0.0：稳定契约发布](plan-1.0.0.md)
 
-将现有 PDF、DOCX、Office 转换能力从“实现存在”提升到“可稳定验收”。
+## 5. 已确认的架构决策
 
-### 工作项
+### 5.1 公开入口只接受文件流和 ID
 
-- 固化真实 PDF、DOCX、Office 测试 fixture。
-- 增加不存在文件、错误后缀、Provider 不存在、LibreOffice 不可用、超时等 API 测试。
-- 定义 artifact 输出目录、清理与保留策略。
-- 统一 `quality_insufficient`、`provider_unavailable`、`conversion_timeout` 等错误语义。
-- 建立 CI 基线：`uv run pytest`。
-
-### 验收
-
-- PDF、DOCX、DOC → DOCX、DOCX → PDF 均通过真实 API 测试。
-- 失败路径有稳定错误码。
-- 全量测试持续通过。
-
-## 5. 0.4.0：Excel 与 PowerPoint 解析
-
-完整方案见：[方案 0.4.0](plan-0.4.0.md)。
-
-### 目标
-
-新增：
+公开 REST API 与远程 HTTP MCP 不允许调用方提交：
 
 ```text
-excel.parse
-ppt.parse
+path
+output_dir
 ```
 
-并支持：
+服务端负责保存上传文件、分配输入路径和 artifact 目录。客户端只持有：
 
 ```text
-.xls / .xlsm → .xlsx → excel.parse
-.ppt → .pptx → ppt.parse
+file_id
+task_id
+artifact_id
 ```
 
-### 里程碑 A：Excel
-
-- 接入 `openpyxl` Provider。
-- 输出 Sheet、稀疏单元格、连续表格区域、公式、合并范围、图片 artifact、Markdown 与纯文本。
-- 实施 ZIP/OOXML 预检、样式污染防护、解析预算和 `partial` 截断。
-- 真实验证 `.xlsx` 和 `.xls → .xlsx → 解析`。
-
-### 里程碑 B：PowerPoint
-
-- 接入 `python-pptx` Provider。
-- 提取幻灯片、文本、表格、图片与 Group Shape。
-- 输出页级 `DocumentPage`、Markdown、纯文本和图片 artifact。
-- 真实验证 `.pptx` 与 `.ppt → .pptx → 解析`。
-
-### 验收
-
-- `/api/v1/skills` 返回两个新 Skill。
-- Excel 和 PPT 的直接格式、旧格式自动转换链路均可运行。
-- 大范围样式污染 Excel 不会导致无限扫描或内存耗尽。
-- 新增真实集成测试与既有测试全部通过。
-
-## 6. 0.4.1：Office 转换后自动解析工作流
-
-### 目标
-
-将“转换”和“解析”从两个独立操作扩展为可追踪的多步 Pipeline。
+### 5.2 解析统一异步执行
 
 ```text
-源文件
-  → 转换（可选）
-  → 对应解析 Skill
-  → PipelineResult
+上传文件流 → 返回 task_id → queued → planning → running
+                                   → succeeded | partial | failed | cancelled | interrupted
 ```
 
-### 工作项
+客户端通过任务 API 或 MCP 查询状态，不依赖长连接等待解析完成。
 
-- 抽取 `OfficeConversionService`，供 `office.convert` 与解析 Skill 共同复用。
-- 定义 `PipelineResult`，包含每步输入、输出、耗时、警告、错误和 Provider。
-- 支持显式选择“只转换”或“转换后解析”。
-- 统一 artifact 路径、生命周期与 provenance。
+### 5.3 暂停 callback
 
-### 验收
+在目标校验、出站网络策略、签名、重试和审计方案明确前，不对外提供 callback。`0.8.0` 将从公开请求和 MCP 工具中移除该参数。
 
-- `.doc`、`.xls`、`.ppt` 均能以单次请求完成转换加解析。
-- 任一步失败时能定位失败阶段和原因。
-- 结果包含完整的转换与解析执行记录。
+### 5.4 本地文件持久化
 
-## 7. 0.5.0：轻量任务化服务
-
-完整方案见：[方案 0.5.0](plan-0.5.0.md)。
-
-### 已交付
-
-- 单进程内存 `asyncio.Queue` FIFO 队列。
-- `TASK_MAX_CONCURRENT_EXECUTIONS` 最大执行任务数配置。
-- `TASK_QUEUE_MAX_SIZE` 等待队列容量与友好 `429` 拒绝。
-- `skill.execute` 与 `office.parse_pipeline` 异步任务。
-- 任务提交、查询、取消排队任务和队列指标 API。
-- `data_id` 业务标识与可选 `callback` 终态通知。
-- HTTP 200 回调成功判定；无签名、无重试，回调失败不改变任务执行结果。
-- 完成任务 TTL 与周期清理。
-
-### 本阶段边界
-
-任务状态只存在当前进程内；服务重启后不会恢复排队、执行中或已完成任务。文件上传、对象存储、数据库、Redis、分布式 Worker、宕机恢复与运行中强制取消保留至业务需要时再单独立项。
-
-### 验收
-
-- 最大同时执行数受配置限制，额外任务 FIFO 排队。
-- 队列满时返回“当前待处理任务较多，请稍后重试”。
-- 调用方可轮询任务状态，或用 callback 获取终态结果。
-
-## 8. 0.6.0：Agent 计划与多 Skill 编排
-
-### 目标
-
-让 LangChain Agent 成为顶层能力选择与计划编排层，而不是基础解析链路依赖。
-
-### 工作项
-
-- 定义结构化 `ParsePlan`、`PlanStep` 与执行状态模型。
-- 暴露 Agent 计划/执行 API。
-- Agent 只调用顶层 Skill，不接触 Provider。
-- 支持多步骤串联、条件分支、重试和汇总。
-- 无模型配置时，确定性解析 API 必须继续正常工作。
-
-### 验收
-
-- Agent 可针对不同文件类型选择合适 Skill。
-- 多步骤计划可执行、可审计、可重放。
-- Agent 失败不影响直接调用确定性 Skill。
-
-## 9. 0.7.0：PDF OCR 与质量路由（后置）
-
-### 定位
-
-PDF OCR 保留为后续解析能力增强，不作为当前 Excel/PPT、工作流、任务化和 Agent 阶段的前置依赖。启动条件是：已有文件任务、artifact 和 Provider 部署的稳定运行基础，且业务已确认扫描 PDF 的处理量与质量目标。
-
-### 工作项
-
-- 实现并注册 OCR Provider，例如 MinerU 的本地或服务化适配器。
-- 按 `text_based`、`scanned`、`image_based`、`mixed` 路由。
-- 将 `mixed` 第一版按整份 OCR 处理，后续再考虑页级混合路由。
-- 定义文本量、页数、完整度等质量门槛。
-- Provider 失败或质量不足时执行 fallback。
-
-### 验收
-
-- 扫描 PDF 与图片型 PDF 能真实返回 OCR 内容。
-- 文本型 PDF 仍优先走普通解析。
-- 结果包含检测证据、实际 Provider、尝试记录、警告和质量指标。
-
-## 10. 不纳入当前路线图：知识加工
-
-以下能力暂不安排版本和研发资源：
+首个持久化版本不引入数据库和 Redis，采用：
 
 ```text
-document.summary
-semantic.chunking
-document.tagging
-metadata.enrichment
+data/files/{file_id}/...
+data/tasks/{task_id}.json
+data/artifacts/{task_id}/...
 ```
 
-原因是当前优先目标为文件解析覆盖、转换编排、任务化和 Agent 调度。待解析结果模型、任务系统和明确的业务消费场景稳定后，再单独评估知识加工的输入规范、模型成本、质量指标和索引方案。
+使用原子写入、文件锁、schema version、启动恢复、TTL 和容量限制。后续是否迁移数据库由实际规模决定。
 
-## 11. 优先级与依赖关系
+### 5.5 默认本机部署
+
+在多用户身份和文件权限模型完成前，ParseFlow 定位为本机或可信内网服务。Docker 默认绑定 `127.0.0.1`，公网监听必须显式开启并置于受支持的认证代理之后。
+
+## 6. 版本依赖关系
 
 ```text
-0.3.1
-  → 0.4.0
-    → 0.4.1
-      → 0.5.0
-        → 0.6.0
-          → 0.7.0（OCR，后置）
-
-知识加工不在当前版本链路中。
+v0.7.0
+  → v0.7.1  当前功能收尾
+    → v0.8.0  安全异步 API 与文件任务持久化
+      → v0.8.1  安全和 Docker 加固
+        → v0.9.0  产品体验、E2E、可观测性
+          → v1.0.0  稳定契约
 ```
 
-近期最高优先级为：
+当前最高优先级为 `0.7.1`，其后立即开始 `0.8.0` 的公开接口重构。
 
-```text
-0.4.0-A：excel.parse + openpyxl + 安全的稀疏解析 + 真实 API 测试
-```
+## 7. 暂不纳入 1.0 前置范围
 
-原因：它复用现有 Office 转换和统一结果模型，业务价值高，且能先验证“转换后自动解析”的内部编排设计。
+以下能力不阻塞 `1.0.0`：
+
+- 多用户/多租户权限系统。
+- PostgreSQL/Redis 分布式任务。
+- 对象存储和分布式 Worker。
+- ASR、摘要、语义切块、标签和知识索引。
+
+这些能力应在基础契约稳定后按实际业务需求单独立项。

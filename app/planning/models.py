@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.version import __version__
+
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
@@ -24,7 +26,7 @@ class PlanStep(BaseModel):
 class ParsePlan(BaseModel):
     plan_id: str
     goal: str
-    planner: dict[str, str] = Field(default_factory=lambda: {"name": "rule-based", "version": "0.6.0"})
+    planner: dict[str, str] = Field(default_factory=lambda: {"name": "rule-based", "version": __version__})
     status: Literal["planned", "running", "completed", "failed"] = "planned"
     created_at: datetime = Field(default_factory=now)
     steps: list[PlanStep]

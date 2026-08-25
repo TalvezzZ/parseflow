@@ -71,6 +71,9 @@ async def test_xml_and_rtf_direct_parse_api(tmp_path: Path) -> None:
     assert xml_response.status_code == 200, xml_response.text
     xml_document = xml_response.json()["data"]["document"]
     assert xml_document["document_type"] == "xml"
+    assert xml_document["representations"]["plain_text"] == xml.read_text(encoding="utf-8")
+    assert "<code>&lt;order&gt;</code>" in xml_document["representations"]["html"]
+    assert "Alice" in xml_document["representations"]["html"]
     assert xml_document["extensions"]["xml"]["root_tag"] == "order"
     assert any(node["path"] == "/order/total" and node["attributes"]["currency"] == "CNY" for node in xml_document["extensions"]["xml"]["nodes"])
 

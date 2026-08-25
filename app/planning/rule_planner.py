@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.planning.models import ParsePlan, PlanStep
 from app.skills.registry import SkillRegistry
+from app.skills.text_formats import TEXT_SUFFIXES
 
 
 class RuleBasedPlanner:
@@ -45,6 +46,9 @@ class RuleBasedPlanner:
         ".avi": ("video.prepare", "识别为视频，当前执行媒体预处理"),
         ".webm": ("video.prepare", "识别为视频，当前执行媒体预处理"),
     }
+    for _text_suffix in TEXT_SUFFIXES - {".rtf"}:
+        routes.setdefault(_text_suffix, ("text.parse", f"识别为 {_text_suffix.lstrip('.').upper()} 文本文件"))
+    del _text_suffix
 
     def __init__(self, registry: SkillRegistry) -> None:
         self.registry = registry

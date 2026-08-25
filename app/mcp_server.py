@@ -1,6 +1,7 @@
 """Parse Agent MCP Server，默认通过 stdio 提供工具。"""
 
 from app.documents.models import FileInput, OfficePipelineRequest, ParseContext
+from app.version import __version__
 
 
 def runtime():
@@ -14,7 +15,7 @@ except ImportError as exc:  # pragma: no cover
     raise RuntimeError("未安装 MCP SDK，请执行 uv sync") from exc
 
 
-mcp = MCPServer("parse-agent", version="0.6.0")
+mcp = MCPServer("parse-agent", version=__version__)
 
 
 @mcp.tool()

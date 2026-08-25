@@ -44,6 +44,7 @@ async def test_single_upload_creates_plan_and_executes_xlsx(tmp_path: Path) -> N
     assert task["plan"]["planner"]["name"] == "rule-based"
     assert task["plan"]["steps"][0]["skill_name"] == "excel.parse"
     assert task["plan"]["steps"][0]["status"] == "succeeded"
+    assert task["result"]["file_id"].startswith("file_")
     assert task["result"]["result"]["data"]["document"]["document_type"] == "xlsx"
 
 
