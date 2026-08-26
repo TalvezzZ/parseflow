@@ -5,7 +5,7 @@ services:
     build:
       context: .
       target: full
-    image: parseflow:0.9.0
+    image: parseflow:1.0.0
     restart: unless-stopped
     read_only: true
     cap_drop:

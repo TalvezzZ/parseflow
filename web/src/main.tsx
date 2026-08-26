@@ -98,7 +98,7 @@ function App() {
   const fileId = task?.file_id
 
   return <main className="app-shell">
-    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · 0.9.0</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className="service"><i /> 服务就绪</span></header>
+    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · 1.0.0</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className="service"><i /> 服务就绪</span></header>
     <section className="workspace-grid">
       <aside className="upload-panel"><h2>开始解析</h2><form onSubmit={submit}>
         <div className="dropzone" role="button" tabIndex={0} aria-label="选择要解析的文件" onDrop={onDrop} onDragOver={(event) => event.preventDefault()} onClick={openFilePicker} onKeyDown={onDropzoneKeyDown}>

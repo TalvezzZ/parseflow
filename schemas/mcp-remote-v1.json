@@ -1,0 +1,1 @@
+{"contract_version":"1.0","tools":["list_skills","preview_parse_plan","submit_file_id","get_task","cancel_task","list_artifacts"],"opaque_id_prefixes":{"file_id":"file_","task_id":"task_","artifact_id":"artifact_"},"forbidden_fields":["path","output_dir","callback","source_path","target_path","artifact_path"]}
