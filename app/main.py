@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
 
 from app.agent.executor import SkillExecutor
@@ -191,8 +191,9 @@ async def submit_parse_task(file: UploadFile = File(...), goal: str | None = For
 
 
 @app.get("/api/v1/tasks", response_model=TaskListResponse, tags=["任务"])
-async def list_tasks(status: str | None = None, cursor: str | None = None, limit: int = Query(default=50, ge=1, le=100)) -> TaskListResponse:
-    items, next_cursor = await task_manager.list(status=status, cursor=cursor, limit=limit)
+async def list_tasks(status: str | None = None, query: str | None = None, cursor: str | None = None,
+                     sort: str = "created_desc", limit: int = Query(default=50, ge=1, le=100)) -> TaskListResponse:
+    items, next_cursor = await task_manager.list(status=status, query=query, cursor=cursor, sort=sort, limit=limit)
     return TaskListResponse(items=items, next_cursor=next_cursor)
 
 
@@ -210,6 +211,27 @@ async def cancel_task(task_id: str) -> TaskRecord:
     if task is None:
         raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": "未找到任务"})
     return task
+
+
+@app.post("/api/v1/tasks/{task_id}/retry", response_model=TaskSubmitResponse, status_code=202, tags=["任务"])
+async def retry_task(task_id: str) -> TaskSubmitResponse:
+    try:
+        task = await task_manager.retry(task_id)
+    except TaskQueueFullError as exc:
+        raise HTTPException(status_code=429, detail={"code": "task_queue_full", "message": str(exc)}) from exc
+    if task is None:
+        raise HTTPException(status_code=409, detail={"code": "task_not_retryable", "message": "任务不存在或尚未结束"})
+    return task
+
+
+@app.delete("/api/v1/tasks/{task_id}", status_code=204, tags=["任务"])
+async def delete_task(task_id: str) -> None:
+    try:
+        deleted = await task_manager.delete(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"code": str(exc), "message": "运行中的任务不能删除"}) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": "未找到任务"})
 
 
 @app.get("/api/v1/tasks/{task_id}/artifacts", response_model=ArtifactListResponse, tags=["任务"])
@@ -230,6 +252,11 @@ async def download_artifact(task_id: str, artifact_id: str) -> FileResponse:
 @app.get("/api/v1/metrics", tags=["系统"])
 async def metrics() -> dict:
     return {"http": http_metrics.snapshot(), "tasks": (await task_manager.metrics()).model_dump()}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics() -> Response:
+    return Response(http_metrics.prometheus(), media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.get("/api/v1/skills", tags=["Skill"])

@@ -115,6 +115,22 @@ async def test_persistent_manager_limits_queue_and_cancels_queued_task(tmp_path:
         await manager.stop()
 
 
+@pytest.mark.asyncio
+async def test_terminal_task_can_retry_and_delete_via_public_api() -> None:
+    created = await request("POST", "/api/v1/tasks/parse", files={"file": ("retry.json", b"{}", "application/json")})
+    task_id = created.json()["task_id"]
+    task = await wait_for_terminal(task_id)
+    assert task["status"] == "succeeded"
+    retried = await request("POST", f"/api/v1/tasks/{task_id}/retry")
+    assert retried.status_code == 202
+    retry_id = retried.json()["task_id"]
+    retry_task = await request("GET", f"/api/v1/tasks/{retry_id}")
+    assert retry_task.json()["retry_of"] == task_id
+    deleted = await request("DELETE", f"/api/v1/tasks/{task_id}")
+    assert deleted.status_code == 204
+    assert (await request("GET", f"/api/v1/tasks/{task_id}")).status_code == 404
+
+
 def test_openapi_has_no_path_callback_or_output_directory_public_inputs() -> None:
     schema = app.openapi()
     serialized = json.dumps(schema)

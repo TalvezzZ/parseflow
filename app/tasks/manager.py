@@ -93,14 +93,39 @@ class PersistentTaskManager:
     async def get(self, task_id: str) -> TaskRecord | None:
         return await self.repository.get(task_id)
 
-    async def list(self, status: str | None = None, limit: int = 50, cursor: str | None = None) -> tuple[list[TaskRecord], str | None]:
+    async def list(self, status: str | None = None, query: str | None = None, limit: int = 50, cursor: str | None = None,
+                   sort: str = "created_desc") -> tuple[list[TaskRecord], str | None]:
         records = await self.repository.list()
         if status:
             records = [record for record in records if record.status == status]
+        if query:
+            needle = query.casefold()
+            records = [record for record in records if needle in record.task_id.casefold() or needle in record.file_id.casefold() or needle in (record.data_id or "").casefold()]
+        records.sort(key=lambda item: (item.created_at, item.task_id), reverse=sort != "created_asc")
         if cursor:
-            records = [record for record in records if record.task_id > cursor]
+            position = next((index for index, record in enumerate(records) if record.task_id == cursor), None)
+            records = records[position + 1:] if position is not None else records
         items = records[:limit]
         return items, items[-1].task_id if len(records) > len(items) else None
+
+    async def retry(self, task_id: str) -> TaskSubmitResponse | None:
+        record = await self.get(task_id)
+        if record is None or record.status not in TERMINAL_STATUSES:
+            return None
+        submitted = await self.submit_parse(record.file_id, record.goal, record.data_id)
+        created = await self.get(submitted.task_id)
+        if created:
+            await self.repository.update(created.task_id, created.revision, lambda item: setattr(item, "retry_of", task_id))
+        return submitted
+
+    async def delete(self, task_id: str) -> bool:
+        record = await self.get(task_id)
+        if record is None:
+            return False
+        if record.status not in TERMINAL_STATUSES:
+            raise ValueError("active_task_cannot_delete")
+        await self.repository.delete(task_id)
+        return True
 
     async def cancel(self, task_id: str) -> TaskRecord | None:
         record = await self.get(task_id)
