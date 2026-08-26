@@ -3,6 +3,8 @@ import tempfile
 from pathlib import Path
 
 from app.documents.models import DocumentBlock, DocumentPage, DocumentResult, ParseContext, ProviderError
+from app.security.archive import validate_zip_archive
+from app.security.budgets import ResourceBudgetExceeded
 from app.skills.providers import Provider, ProviderManifest, ProviderResult
 
 
@@ -21,6 +23,11 @@ class PythonPptxProvider(Provider):
         return await asyncio.to_thread(self._parse_sync, context)
 
     def _parse_sync(self, context: ParseContext) -> ProviderResult:
+        try:
+            validate_zip_archive(context.file.path, max_entries=10_000, max_uncompressed_bytes=500 * 1024 * 1024)
+        except ResourceBudgetExceeded as exc:
+            return ProviderResult(status="failed", provider_name=self.manifest.name,
+                                  error=ProviderError(code=exc.code, message=str(exc), retryable=False))
         try:
             from pptx import Presentation
             from pptx.enum.shapes import MSO_SHAPE_TYPE

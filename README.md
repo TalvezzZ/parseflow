@@ -268,6 +268,13 @@ The active roadmap and detailed release plans are maintained in:
 - `web/` — React/Vite ParseFlow workbench
 - `docs/` — architecture and iteration plans
 
+## v0.8.1 security and deployment
+
+- Public parsing is protected by upload size limits, XML budgets, OOXML ZIP directory checks, task timeouts, and a storage free-space threshold.
+- Docker binds to loopback by default and uses a read-only root filesystem, dropped Linux capabilities, PID/CPU/memory limits, writable `/data`, and a writable OCR model cache.
+- `/health` reports process liveness; `/ready` additionally requires writable storage, safe free capacity, and an active persistent task worker.
+- Production deployments should preload OCR models before restricting outbound network access.
+
 ## Current limitations
 
 - Task records are persisted locally and recover queued work after restart; active work is marked interrupted and must be explicitly resubmitted.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from shutil import disk_usage
 from time import perf_counter
 from uuid import uuid4
 
@@ -28,7 +29,8 @@ from app.version import __version__
 
 settings = get_settings()
 data_root = Path(settings.data_dir).resolve()
-file_store = LocalFileStore(str(data_root / "files"), settings.file_max_size_mb, settings.file_allowed_suffixes)
+file_store = LocalFileStore(str(data_root / "files"), settings.file_max_size_mb, settings.file_allowed_suffixes,
+                            min_free_mb=settings.storage_min_free_mb)
 task_repository = FileTaskRepository(data_root / "tasks")
 artifact_repository = ArtifactRepository(data_root / "artifacts")
 http_metrics = HttpMetrics()
@@ -132,6 +134,23 @@ app.mount("/mcp", mcp.streamable_http_app(streamable_http_path="/", stateless_ht
 @app.get("/health", tags=["系统"])
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": settings.app_name}
+
+
+@app.get("/ready", tags=["系统"])
+async def ready() -> dict[str, str]:
+    """Check local persistence and worker availability without probing parsers."""
+    try:
+        data_root.mkdir(parents=True, exist_ok=True)
+        probe = data_root / ".ready-probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        if disk_usage(data_root).free < settings.storage_min_free_mb * 1024 * 1024:
+            raise OSError("storage capacity below safety threshold")
+        if not task_manager._started or not task_manager._workers:
+            raise OSError("task worker unavailable")
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail={"code": "not_ready", "message": str(exc)}) from exc
+    return {"status": "ready", "service": settings.app_name}
 
 
 @app.post("/api/v1/files", response_model=StoredFilePublic, status_code=201, tags=["文件"])

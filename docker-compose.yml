@@ -5,8 +5,14 @@ services:
     build:
       context: .
       target: full
-    image: parseflow:0.8.0
+    image: parseflow:0.8.1
     restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 4g
+    cpus: 2.0
     env_file:
       - path: .env
         required: false
@@ -31,7 +37,7 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1/ready', timeout=3)"]
       interval: 30s
       timeout: 5s
       start_period: 45s

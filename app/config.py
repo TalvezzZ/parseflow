@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     task_cleanup_interval_seconds: int = 300
     task_shutdown_grace_seconds: int = 30
     task_max_result_size_mb: int = 20
+    storage_min_free_mb: int = 1024
+    storage_soft_free_mb: int = 2048
+    storage_tmp_max_age_seconds: int = 86400
     data_dir: str = "./data"
     file_storage_dir: str = "./data/files"
     file_max_size_mb: int = 100
@@ -68,7 +71,7 @@ class Settings(BaseSettings):
         ".mp4", ".mov", ".mkv", ".avi", ".webm",
     } | set(TEXT_SUFFIXES)))
     api_key: str | None = None
-    # Remote MCP exposes server-local file paths; require API_KEY when enabled.
+    # Remote MCP uses opaque file/task IDs; require API_KEY when enabled.
     mcp_http_enabled: bool = False
     # Comma-separated Host headers accepted by MCP DNS-rebinding protection.
     mcp_allowed_hosts: str = "localhost,127.0.0.1,localhost:*,127.0.0.1:*,[::1]:*"

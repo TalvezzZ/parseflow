@@ -38,9 +38,10 @@ class StoredFileRecord(BaseModel):
 class LocalFileStore:
     """Controlled local upload repository with separate public and internal views."""
 
-    def __init__(self, root: str, max_size_mb: int, allowed_suffixes: str) -> None:
+    def __init__(self, root: str, max_size_mb: int, allowed_suffixes: str, min_free_mb: int = 0) -> None:
         self.root = Path(root).resolve()
         self.max_size_bytes = max_size_mb * 1024 * 1024
+        self.min_free_bytes = min_free_mb * 1024 * 1024
         self.allowed_suffixes = {item.strip().lower() for item in allowed_suffixes.split(",") if item.strip()}
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -49,6 +50,8 @@ class LocalFileStore:
         suffix = Path(filename).suffix.lower()
         if self.allowed_suffixes and suffix not in self.allowed_suffixes:
             raise ValueError(f"不支持上传该文件类型: {suffix or '<无后缀>'}")
+        if self.min_free_bytes and shutil.disk_usage(self.root).free < self.min_free_bytes:
+            raise ValueError("storage_capacity_exceeded: 存储可用空间低于安全阈值")
         file_id = new_id("file")
         directory = self._directory(file_id)
         directory.mkdir(parents=True, exist_ok=False)

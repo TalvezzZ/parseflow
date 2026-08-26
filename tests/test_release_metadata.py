@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_public_release_versions_are_aligned() -> None:
-    assert __version__ == "0.8.0"
+    assert __version__ == "0.8.1"
     assert app.version == __version__
 
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
