@@ -5,13 +5,14 @@ services:
     build:
       context: .
       target: full
-    image: parseflow:0.7.1
+    image: parseflow:0.8.0
     restart: unless-stopped
     env_file:
       - path: .env
         required: false
     environment:
       APP_ENV: production
+      DATA_DIR: /data
       FILE_STORAGE_DIR: /data/files
       # Set API_KEY in .env before exposing the service outside a trusted network.
       # Nginx forwards it internally so the browser workbench remains usable.
@@ -21,7 +22,7 @@ services:
       # Comma-separated public Host headers accepted by MCP transport security.
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,localhost:*,127.0.0.1:*}
     ports:
-      - "${PARSEFLOW_PORT:-8080}:80"
+      - "${PARSEFLOW_BIND_HOST:-127.0.0.1}:${PARSEFLOW_PORT:-8080}:80"
     volumes:
       - parseflow-data:/data
       - parseflow-models:/home/parseflow/.paddlex

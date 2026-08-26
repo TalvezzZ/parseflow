@@ -2,18 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
-from typing import Any
-
-import httpx
 
 from app.documents.models import ProviderError
-from app.tasks.models import TaskMetrics, TaskRecord, TaskSubmitResponse, utc_now
+from app.storage.ids import new_id
+from app.tasks.models import TERMINAL_STATUSES, TaskMetrics, TaskRecord, TaskResultEnvelope, TaskSubmitResponse, utc_now
+from app.tasks.repository import FileTaskRepository, TaskRevisionConflictError
 
 
-TaskRunner = Callable[[TaskRecord], Awaitable[dict[str, Any]]]
+TaskRunner = Callable[[TaskRecord], Awaitable[TaskResultEnvelope]]
 
 
 class TaskQueueFullError(Exception):
@@ -23,48 +21,49 @@ class TaskQueueFullError(Exception):
         super().__init__("当前待处理任务较多，请稍后重试。")
 
 
-class InMemoryTaskManager:
-    """单进程 FIFO 队列；状态不跨服务重启持久化。"""
+class PersistentTaskManager:
+    """Single-process persistent queue; disk records are the source of truth."""
 
-    def __init__(
-        self,
-        runner: TaskRunner,
-        max_concurrent_executions: int = 2,
-        max_queue_size: int = 100,
-        default_timeout_seconds: int = 1800,
-        result_ttl_seconds: int = 86400,
-        cleanup_interval_seconds: int = 300,
-        callback_timeout_seconds: int = 15,
-    ) -> None:
+    def __init__(self, runner: TaskRunner, repository: FileTaskRepository, *, max_concurrent_executions: int = 2,
+                 max_queue_size: int = 100, default_timeout_seconds: int = 1800,
+                 result_ttl_seconds: int = 86400, cleanup_interval_seconds: int = 300) -> None:
         self.runner = runner
+        self.repository = repository
         self.max_concurrent_executions = max_concurrent_executions
         self.max_queue_size = max_queue_size
         self.default_timeout_seconds = default_timeout_seconds
         self.result_ttl_seconds = result_ttl_seconds
         self.cleanup_interval_seconds = cleanup_interval_seconds
-        self.callback_timeout_seconds = callback_timeout_seconds
-        self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=max_queue_size)
-        self._tasks: dict[str, TaskRecord] = {}
+        self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._workers: list[asyncio.Task[None]] = []
         self._cleanup_worker: asyncio.Task[None] | None = None
         self._started = False
+        self._accepting = False
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def start(self) -> None:
-        current_loop = asyncio.get_running_loop()
-        if self._started and self._workers and all(worker.get_loop() is current_loop and not worker.done() for worker in self._workers):
+        loop = asyncio.get_running_loop()
+        if self._started and self._loop is loop and any(not worker.done() for worker in self._workers):
             return
-        # ASGI test clients can create separate event loops. Production has one loop,
-        # but reset stale in-memory workers rather than accepting tasks with no consumer.
+        # ASGI test clients may use a new loop. Disk is authoritative, so rebuild
+        # consumers and recover queued records rather than keeping stale workers.
         if self._started:
             self._workers = []
             self._cleanup_worker = None
-            self._queue = asyncio.Queue(maxsize=self.max_queue_size)
-            self._started = False
+            self._queue = asyncio.Queue()
+        self._loop = loop
         self._started = True
-        self._workers = [asyncio.create_task(self._worker(index), name=f"parse-agent-task-worker-{index}") for index in range(self.max_concurrent_executions)]
-        self._cleanup_worker = asyncio.create_task(self._cleanup_loop(), name="parse-agent-task-cleanup")
+        self._accepting = True
+        recovered = await self.repository.recover()
+        for record in recovered:
+            if record.status == "queued":
+                self._queue.put_nowait(record.task_id)
+        self._workers = [asyncio.create_task(self._worker(index), name=f"parseflow-task-worker-{index}")
+                         for index in range(self.max_concurrent_executions)]
+        self._cleanup_worker = asyncio.create_task(self._cleanup_loop(), name="parseflow-task-cleanup")
 
     async def stop(self) -> None:
+        self._accepting = False
         for worker in self._workers:
             worker.cancel()
         if self._workers:
@@ -76,38 +75,61 @@ class InMemoryTaskManager:
         self._cleanup_worker = None
         self._started = False
 
-    async def submit(self, task_type: str, request: dict[str, Any], data_id: str | None, callback: str | None) -> TaskSubmitResponse:
+    async def submit_parse(self, file_id: str, goal: str | None, data_id: str | None) -> TaskSubmitResponse:
         await self.start()
-        self._cleanup_expired()
-        if self._queue.full():
+        if not self._accepting:
+            raise RuntimeError("任务服务正在关闭")
+        if self._queue.qsize() >= self.max_queue_size:
             raise TaskQueueFullError(self._queue.qsize(), self.max_queue_size)
-        task_id = f"task_{uuid.uuid4().hex}"
-        record = TaskRecord(task_id=task_id, task_type=task_type, data_id=data_id, callback=callback,
-                            callback_status="pending" if callback else "not_requested", request=request)
-        self._tasks[task_id] = record
-        self._queue.put_nowait(task_id)
-        return TaskSubmitResponse(task_id=task_id, status="queued", queue_position=self._queue.qsize(), created_at=record.created_at)
+        record = TaskRecord(task_id=new_id("task"), file_id=file_id, goal=goal, data_id=data_id)
+        await self.repository.create(record)
+        self._queue.put_nowait(record.task_id)
+        return TaskSubmitResponse(
+            task_id=record.task_id, file_id=file_id, status="queued", queue_position=self._queue.qsize(),
+            created_at=record.created_at,
+            links={"self": f"/api/v1/tasks/{record.task_id}", "file": f"/api/v1/files/{file_id}/content"},
+        )
 
-    def get(self, task_id: str) -> TaskRecord | None:
-        self._cleanup_expired()
-        return self._tasks.get(task_id)
+    async def get(self, task_id: str) -> TaskRecord | None:
+        return await self.repository.get(task_id)
 
-    def cancel(self, task_id: str) -> TaskRecord | None:
-        record = self.get(task_id)
-        if record is None or record.status != "queued":
-            return record
-        record.status = "cancelled"
-        record.finished_at = utc_now()
-        record.duration_ms = int((record.finished_at - record.created_at).total_seconds() * 1000)
+    async def list(self, status: str | None = None, limit: int = 50, cursor: str | None = None) -> tuple[list[TaskRecord], str | None]:
+        records = await self.repository.list()
+        if status:
+            records = [record for record in records if record.status == status]
+        if cursor:
+            records = [record for record in records if record.task_id > cursor]
+        items = records[:limit]
+        return items, items[-1].task_id if len(records) > len(items) else None
+
+    async def cancel(self, task_id: str) -> TaskRecord | None:
+        record = await self.get(task_id)
+        if record is None:
+            return None
+        if record.status == "queued":
+            return await self.repository.update(task_id, record.revision, self._cancel_now)
+        if record.status in {"planning", "running"}:
+            return await self.repository.update(task_id, record.revision, self._request_cancel)
         return record
 
-    def metrics(self) -> TaskMetrics:
-        self._cleanup_expired()
-        records = list(self._tasks.values())
+    @staticmethod
+    def _cancel_now(record: TaskRecord) -> None:
+        record.status = "cancelled"
+        record.cancel_requested = True
+        record.finished_at = utc_now()
+        record.duration_ms = int((record.finished_at - record.created_at).total_seconds() * 1000)
+
+    @staticmethod
+    def _request_cancel(record: TaskRecord) -> None:
+        record.status = "cancelling"
+        record.cancel_requested = True
+
+    async def metrics(self) -> TaskMetrics:
+        records = await self.repository.list()
         return TaskMetrics(
             queued_tasks=sum(record.status == "queued" for record in records),
-            running_tasks=sum(record.status == "running" for record in records),
-            completed_tasks=sum(record.status in {"succeeded", "partial", "failed", "cancelled"} for record in records),
+            running_tasks=sum(record.status in {"planning", "running", "cancelling"} for record in records),
+            completed_tasks=sum(record.status in TERMINAL_STATUSES for record in records),
             max_concurrent_executions=self.max_concurrent_executions,
             max_queue_size=self.max_queue_size,
         )
@@ -116,59 +138,66 @@ class InMemoryTaskManager:
         while True:
             task_id = await self._queue.get()
             try:
-                record = self._tasks.get(task_id)
-                if record is None or record.status == "cancelled":
-                    continue
-                await self._execute(record)
+                record = await self.get(task_id)
+                if record is not None and record.status == "queued":
+                    await self._execute(record)
             finally:
                 self._queue.task_done()
 
-    async def _execute(self, record: TaskRecord) -> None:
-        record.status = "running"
-        record.started_at = utc_now()
-        timeout = int(record.request.get("timeout_seconds") or self.default_timeout_seconds)
-        started = time.perf_counter()
-        try:
-            record.result = await asyncio.wait_for(self.runner(record), timeout=timeout)
-            status = record.result.get("status")
-            record.status = "partial" if status == "partial" else "succeeded" if status == "success" else "failed"
-            if record.status == "failed":
-                record.error = record.result.get("error") or {"code": "task_failed", "message": "任务执行失败", "retryable": False}
-        except TimeoutError:
-            record.status = "failed"
-            record.error = ProviderError(code="task_timeout", message=f"任务超过 {timeout} 秒", retryable=False).model_dump()
-        except Exception as exc:  # Ensure one provider failure never kills a worker.
-            record.status = "failed"
-            record.error = ProviderError(code="task_execution_failed", message=str(exc), retryable=False).model_dump()
-        finally:
-            record.finished_at = utc_now()
-            record.duration_ms = int((time.perf_counter() - started) * 1000)
-            if record.callback:
-                await self._notify_callback(record)
+    async def _transition(self, record: TaskRecord, status: str) -> TaskRecord:
+        def mutate(current: TaskRecord) -> None:
+            current.status = status  # type: ignore[assignment]
+            if status == "planning":
+                current.started_at = utc_now()
+        return await self.repository.update(record.task_id, record.revision, mutate)
 
-    async def _notify_callback(self, record: TaskRecord) -> None:
-        payload = record.model_dump(exclude={"request", "callback_status", "callback_status_code", "callback_error"}, mode="json")
+    async def _execute(self, record: TaskRecord) -> None:
         try:
-            async with httpx.AsyncClient(timeout=self.callback_timeout_seconds) as client:
-                response = await client.post(record.callback, json=payload)
-            record.callback_status_code = response.status_code
-            if response.status_code == 200:
-                record.callback_status = "succeeded"
-            else:
-                record.callback_status = "failed"
-                record.callback_error = f"回调服务返回 HTTP {response.status_code}，仅 HTTP 200 视为成功"
+            record = await self._transition(record, "planning")
+            if record.cancel_requested:
+                await self.repository.update(record.task_id, record.revision, self._cancel_now)
+                return
+            record = await self._transition(record, "running")
+            started = time.perf_counter()
+            envelope = await asyncio.wait_for(self.runner(record), timeout=self.default_timeout_seconds)
+            current = await self.get(record.task_id)
+            if current is None:
+                return
+            def complete(value: TaskRecord) -> None:
+                if value.cancel_requested:
+                    self._cancel_now(value)
+                    return
+                value.result = envelope
+                value.warnings = envelope.warnings
+                value.error = envelope.error
+                value.status = envelope.status
+                value.finished_at = utc_now()
+                value.duration_ms = int((time.perf_counter() - started) * 1000)
+            await self.repository.update(current.task_id, current.revision, complete)
+        except TimeoutError:
+            await self._fail(record.task_id, "task_timeout", f"任务超过 {self.default_timeout_seconds} 秒")
         except Exception as exc:
-            record.callback_status = "failed"
-            record.callback_error = str(exc)
+            await self._fail(record.task_id, "task_execution_failed", str(exc))
+
+    async def _fail(self, task_id: str, code: str, message: str) -> None:
+        current = await self.get(task_id)
+        if current is None or current.status in TERMINAL_STATUSES:
+            return
+        def fail(record: TaskRecord) -> None:
+            record.status = "failed"
+            record.error = ProviderError(code=code, message=message, retryable=False).model_dump()
+            record.finished_at = utc_now()
+            record.duration_ms = int((record.finished_at - (record.started_at or record.created_at)).total_seconds() * 1000)
+        await self.repository.update(current.task_id, current.revision, fail)
 
     async def _cleanup_loop(self) -> None:
         while True:
             await asyncio.sleep(self.cleanup_interval_seconds)
-            self._cleanup_expired()
+            cutoff = utc_now() - timedelta(seconds=self.result_ttl_seconds)
+            for record in await self.repository.list():
+                if record.status in TERMINAL_STATUSES and record.finished_at and record.finished_at < cutoff:
+                    await self.repository.delete(record.task_id)
 
-    def _cleanup_expired(self) -> None:
-        cutoff = utc_now() - timedelta(seconds=self.result_ttl_seconds)
-        expired = [task_id for task_id, record in self._tasks.items()
-                   if record.finished_at and record.finished_at < cutoff]
-        for task_id in expired:
-            self._tasks.pop(task_id, None)
+
+# v0.8.0 intentionally removes the in-memory/callback implementation.
+InMemoryTaskManager = PersistentTaskManager

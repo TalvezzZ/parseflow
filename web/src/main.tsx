@@ -4,12 +4,15 @@ import './styles.css'
 import './dashboard.css'
 
 type Json = Record<string, unknown>
-type TaskStatus = 'queued' | 'planning' | 'running' | 'succeeded' | 'partial' | 'failed' | 'cancelled'
-type Task = { task_id: string; status: TaskStatus; data_id?: string; created_at: string; started_at?: string; finished_at?: string; duration_ms?: number; error?: Json; plan?: Json; result?: Json; callback_status?: string }
-const terminal = new Set<TaskStatus>(['succeeded', 'partial', 'failed', 'cancelled'])
+type TaskStatus = 'queued' | 'planning' | 'running' | 'cancelling' | 'succeeded' | 'partial' | 'failed' | 'cancelled' | 'interrupted'
+type Artifact = { artifact_id: string; filename: string; content_type?: string; size_bytes?: number; kind?: string; download_url?: string }
+type TaskResult = { status: 'succeeded' | 'partial' | 'failed'; document?: Json; artifacts: Artifact[]; steps: Json[]; conversion?: Json; warnings: string[]; metrics: Json; error?: Json }
+type Task = { task_id: string; file_id: string; status: TaskStatus; data_id?: string; goal?: string; created_at: string; updated_at?: string; started_at?: string; finished_at?: string; duration_ms?: number; error?: Json; plan?: Json; result?: TaskResult; warnings?: string[] }
+type SubmittedTask = { task_id: string; file_id: string; status: 'queued'; created_at: string }
+const terminal = new Set<TaskStatus>(['succeeded', 'partial', 'failed', 'cancelled', 'interrupted'])
 const recentKey = 'parse-agent-recent-tasks'
 
-const statusLabels: Record<TaskStatus, string> = { queued: '等待处理', planning: '正在制定解析方案', running: '正在执行解析', succeeded: '解析完成', partial: '部分完成', failed: '解析失败', cancelled: '已取消' }
+const statusLabels: Record<TaskStatus, string> = { queued: '等待处理', planning: '正在制定解析方案', running: '正在执行解析', cancelling: '正在取消', succeeded: '解析完成', partial: '部分完成', failed: '解析失败', cancelled: '已取消', interrupted: '服务中断' }
 
 async function api<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options)
@@ -17,61 +20,8 @@ async function api<T>(url: string, options?: RequestInit): Promise<T> {
   if (!response.ok) throw new Error((body.detail?.message || body.detail || body.message || `请求失败：${response.status}`) as string)
   return body as T
 }
-function executionOf(task?: Task | null): Json | undefined {
-  if (!task?.result) return undefined
-  return (task.result.result && typeof task.result.result === 'object' ? task.result.result : task.result) as Json
-}
-function documentOf(task?: Task | null): Json | undefined {
-  const execution = executionOf(task)
-  const data = execution?.data as Json | undefined
-  const pipelineData = execution?.result as Json | undefined
-  return (data?.document || pipelineData?.document || execution?.document) as Json | undefined
-}
-function fileIdOf(task?: Task | null, document?: Json): string | undefined {
-  const source = document?.source_file as Json | undefined
-  if (source?.file_id) return String(source.file_id)
-  const resultFileId = task?.result?.file_id
-  if (resultFileId) return String(resultFileId)
-  const execution = executionOf(task)
-  const pipelineSource = execution?.source_file as Json | undefined
-  return pipelineSource?.file_id ? String(pipelineSource.file_id) : undefined
-}
-function artifactRelativePath(artifact: Json): string | undefined {
-  const explicit = artifact.relative_path || artifact.artifact_path
-  const raw = explicit ? String(explicit) : (() => {
-    const path = String(artifact.path || artifact.target_path || '').replaceAll('\\', '/')
-    const marker = '/artifacts/'
-    const index = path.lastIndexOf(marker)
-    return index >= 0 ? path.slice(index + marker.length) : ''
-  })()
-  const normalized = raw.replaceAll('\\', '/').replace(/^\/+/, '')
-  const parts = normalized.split('/').filter(Boolean)
-  if (!parts.length || parts.some((part) => part === '.' || part === '..')) return undefined
-  return parts.join('/')
-}
-function artifactsOf(task?: Task | null, document?: Json): Json[] {
-  const found: Json[] = []
-  const visit = (value: unknown, key = '') => {
-    if (!value || typeof value !== 'object') return
-    if (Array.isArray(value)) {
-      if (key === 'images' || key === 'artifacts') value.forEach((item) => { if (item && typeof item === 'object' && !Array.isArray(item)) found.push(item as Json) })
-      value.forEach((item) => visit(item))
-      return
-    }
-    const object = value as Json
-    if (key === 'conversion' && object.target_path) found.push({ ...object, path: object.target_path, kind: 'converted_document' })
-    Object.entries(object).forEach(([childKey, child]) => visit(child, childKey))
-  }
-  visit(executionOf(task))
-  visit(document)
-  const seen = new Set<string>()
-  return found.filter((artifact) => {
-    const path = artifactRelativePath(artifact)
-    if (!path || seen.has(path)) return false
-    seen.add(path)
-    return true
-  })
-}
+function documentOf(task?: Task | null): Json | undefined { return task?.result?.document }
+function artifactsOf(task?: Task | null): Artifact[] { return task?.result?.artifacts || [] }
 function representationsOf(document?: Json): Json {
   const raw = document?.representations
   const representations = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Json : {}
@@ -127,8 +77,9 @@ function App() {
     setSubmitting(true); setError('')
     try {
       const form = new FormData(); form.append('file', file); if (goal.trim()) form.append('goal', goal.trim())
-      const created = await api<Task>('/api/v1/parse', { method: 'POST', body: form })
-      setTask(created); storeRecent(created); setRecent(JSON.parse(localStorage.getItem(recentKey) || '[]')); setActiveTab('overview')
+      const created = await api<SubmittedTask>('/api/v1/tasks/parse', { method: 'POST', body: form })
+      const createdTask = await api<Task>(`/api/v1/tasks/${created.task_id}`)
+      setTask(createdTask); storeRecent(createdTask); setRecent(JSON.parse(localStorage.getItem(recentKey) || '[]')); setActiveTab('overview')
     } catch (err) { setError(err instanceof Error ? err.message : '提交失败') } finally { setSubmitting(false) }
   }
   const onDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); choose(event.dataTransfer.files[0]) }
@@ -139,11 +90,11 @@ function App() {
   const plans = (task?.plan?.steps as Json[] | undefined) || []
   const tables = (document?.tables as Json[] | undefined) || []
   const representations = representationsOf(document)
-  const artifacts = useMemo(() => artifactsOf(task, document), [task, document])
-  const fileId = fileIdOf(task, document)
+  const artifacts = useMemo(() => artifactsOf(task), [task])
+  const fileId = task?.file_id
 
   return <main className="app-shell">
-    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · 0.7.1</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className="service"><i /> 服务就绪</span></header>
+    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · 0.8.0</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className="service"><i /> 服务就绪</span></header>
     <section className="workspace-grid">
       <aside className="upload-panel"><h2>开始解析</h2><form onSubmit={submit}>
         <div className="dropzone" role="button" tabIndex={0} aria-label="选择要解析的文件" onDrop={onDrop} onDragOver={(event) => event.preventDefault()} onClick={openFilePicker} onKeyDown={onDropzoneKeyDown}>
@@ -175,7 +126,7 @@ function SupportedFormats() {
 }
 function EmptyState({ recent, open }: { recent: Task[]; open: (task: Task) => void }) { return <div className="empty"><div className="empty-mark">✦</div><h2>等待文件</h2><p>上传后，系统会创建任务、展示自动解析方案，并在这里呈现可用结果。</p>{recent.length > 0 && <div className="recent"><h3>最近任务</h3>{recent.map((item) => <button key={item.task_id} onClick={() => open(item)}><span>{item.task_id.slice(0, 16)}…</span><em className={`badge ${item.status}`}>{statusLabels[item.status]}</em></button>)}</div>}</div> }
 
-function TaskView({ task, document, fileId, plans, tables, representations, artifacts, activeTab, setActiveTab, backToList }: { task: Task; document?: Json; fileId?: string; plans: Json[]; tables: Json[]; representations: Json; artifacts: Json[]; activeTab: string; setActiveTab: (tab: never) => void; backToList: () => void }) {
+function TaskView({ task, document, fileId, plans, tables, representations, artifacts, activeTab, setActiveTab, backToList }: { task: Task; document?: Json; fileId?: string; plans: Json[]; tables: Json[]; representations: Json; artifacts: Artifact[]; activeTab: string; setActiveTab: (tab: never) => void; backToList: () => void }) {
   const tabs = [['overview','概览'],['text','正文'],['tables',`表格 ${tables.length || ''}`],['markdown','Markdown'],['html','HTML 预览'],['json','结构化 JSON'],['artifacts',`产物 ${artifacts.length || ''}`],['details','执行详情']] as const
   const duration = taskDuration(task)
   const durationLabel = terminal.has(task.status) ? '整体执行时间' : '已用时间'
@@ -200,25 +151,22 @@ function CopyButton({ text }: { text: string }) {
  }
  return <div className="result-actions"><button type="button" className="copy-result" onClick={copy}>{copied ? '已复制 ✓' : '复制结果'}</button><span className="sr-only" role="status" aria-live="polite">{copied ? '解析结果已复制到剪贴板' : ''}</span></div>
 }
-function ArtifactItem({ artifact, fileId, index }: { artifact: Json; fileId?: string; index: number }) {
- const relativePath = artifactRelativePath(artifact)
- const filename = String(artifact.filename || relativePath?.split('/').pop() || `产物 ${index + 1}`)
- const downloadUrl = fileId && relativePath
-  ? `/api/v1/files/${encodeURIComponent(fileId)}/artifacts/${relativePath.split('/').map(encodeURIComponent).join('/')}`
-  : undefined
- return <div className="artifact"><span aria-hidden="true">⌁</span><div><strong>{filename}</strong><small>{String(artifact.kind || '文件产物')}</small></div>{downloadUrl ? <a href={downloadUrl} download={filename}>下载</a> : <small>暂无可用下载地址</small>}</div>
+function ArtifactItem({ artifact, taskId, index }: { artifact: Artifact; taskId: string; index: number }) {
+ const filename = artifact.filename || `产物 ${index + 1}`
+ const downloadUrl = artifact.download_url || `/api/v1/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(artifact.artifact_id)}`
+ return <div className="artifact"><span aria-hidden="true">⌁</span><div><strong>{filename}</strong><small>{artifact.kind || '文件产物'}</small></div><a href={downloadUrl} download={filename}>下载</a></div>
 }
-function ResultTab({ tab, task, document, fileId, tables, representations, artifacts }: { tab: string; task: Task; document?: Json; fileId?: string; tables: Json[]; representations: Json; artifacts: Json[] }) {
+function ResultTab({ tab, task, document, fileId: _fileId, tables, representations, artifacts }: { tab: string; task: Task; document?: Json; fileId?: string; tables: Json[]; representations: Json; artifacts: Artifact[] }) {
  const plainText = String(representations.plain_text || '当前结果没有可用的纯文本表示。')
  const markdown = String(representations.markdown || '当前结果没有可用的 Markdown 表示。')
- const details = JSON.stringify({ plan: task.plan, callback_status: task.callback_status, error: task.error, result: task.result }, null, 2)
+ const details = JSON.stringify({ plan: task.plan, error: task.error, warnings: task.warnings, result: task.result }, null, 2)
  const structured = JSON.stringify(document || task, null, 2)
  if (tab === 'overview') return <div className="overview"><Stat label="文档类型" value={String(document?.document_type || '等待结果')} /><Stat label="表格" value={String(tables.length)} /><Stat label="图片 / 产物" value={String((document?.images as Json[] | undefined)?.length || 0)} /><Stat label="任务状态" value={statusLabels[task.status]} /><section><h3>解析摘要</h3><p>{plainText.slice(0, 600)}</p></section></div>
  if (tab === 'text') return <><CopyButton text={plainText} /><pre className="text-preview">{plainText}</pre></>
  if (tab === 'markdown') return <><CopyButton text={markdown} /><pre className="text-preview markdown">{markdown}</pre></>
  if (tab === 'html') return representations.html ? <iframe className="html-preview" title="HTML 内容预览" sandbox="" srcDoc={String(representations.html)} /> : <NoContent text="当前结果没有可用的 HTML 表示。" />
  if (tab === 'tables') return <div className="tables">{tables.length ? tables.map((table, index) => <Table key={index} table={table} />) : <NoContent text="当前结果没有可预览的表格。" />}</div>
- if (tab === 'artifacts') return <div className="artifacts">{artifacts.length ? artifacts.map((artifact, i) => <ArtifactItem artifact={artifact} fileId={fileId} index={i} key={`${artifactRelativePath(artifact)}-${i}`} />) : <NoContent text="当前结果没有可下载的 artifact。" />}</div>
+ if (tab === 'artifacts') return <div className="artifacts">{artifacts.length ? artifacts.map((artifact, i) => <ArtifactItem artifact={artifact} taskId={task.task_id} index={i} key={artifact.artifact_id} />) : <NoContent text="当前结果没有可下载的 artifact。" />}</div>
  if (tab === 'details') return <><CopyButton text={details} /><pre className="json">{details}</pre></>
  return <><CopyButton text={structured} /><pre className="json">{structured}</pre></>
 }

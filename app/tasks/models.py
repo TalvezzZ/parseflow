@@ -3,83 +3,69 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl
-
-from app.documents.models import ParseContext
+from pydantic import BaseModel, Field
 
 
-TaskStatus = Literal["queued", "planning", "running", "succeeded", "partial", "failed", "cancelled"]
-CallbackStatus = Literal["not_requested", "pending", "succeeded", "failed"]
+TaskStatus = Literal[
+    "queued", "planning", "running", "cancelling", "succeeded", "partial", "failed", "cancelled", "interrupted"
+]
+TerminalTaskStatus = Literal["succeeded", "partial", "failed", "cancelled", "interrupted"]
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class TaskSkillRequest(BaseModel):
-    """异步执行一个顶层 Skill 的请求。"""
+class TaskResultEnvelope(BaseModel):
+    """Stable public result shape, independent of the executed Skill/Pipeline."""
 
-    skill_name: str = Field(description="顶层 Skill 名称，例如 excel.parse")
+    status: Literal["succeeded", "partial", "failed"]
     file_id: str
-    path: str
-    filename: str | None = None
-    mime_type: str | None = None
-    provider: str | None = None
-    fallback_enabled: bool = True
-    data_id: str | None = Field(default=None, max_length=128, description="调用方业务标识，将原样回传")
-    callback: HttpUrl | None = Field(default=None, description="终态通知 URL；为空时请轮询任务")
-    timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
-
-    def to_context(self) -> ParseContext:
-        from app.documents.models import FileInput, ParseOptions
-        return ParseContext(file=FileInput(file_id=self.file_id, path=self.path, filename=self.filename, mime_type=self.mime_type),
-                            options=ParseOptions(provider=self.provider, fallback_enabled=self.fallback_enabled))
-
-
-class TaskOfficePipelineRequest(BaseModel):
-    """异步执行 Office 转换和解析 Pipeline 的请求。"""
-
-    file_id: str
-    path: str
-    filename: str | None = None
-    mime_type: str | None = None
-    output_dir: str | None = None
-    timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
-    data_id: str | None = Field(default=None, max_length=128, description="调用方业务标识，将原样回传")
-    callback: HttpUrl | None = Field(default=None, description="终态通知 URL；为空时请轮询任务")
-
-    def to_context(self) -> ParseContext:
-        from app.documents.models import FileInput
-        return ParseContext(file=FileInput(file_id=self.file_id, path=self.path, filename=self.filename, mime_type=self.mime_type),
-                            metadata={"output_dir": self.output_dir, "timeout_seconds": self.timeout_seconds} if self.timeout_seconds else {"output_dir": self.output_dir})
+    document: dict[str, Any] | None = None
+    artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    conversion: dict[str, Any] | None = None
+    warnings: list[str] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    error: dict[str, Any] | None = None
 
 
 class TaskRecord(BaseModel):
-    """单进程生命周期内保存的任务快照。"""
+    """Durable internal task record. `request` contains opaque IDs only."""
 
+    schema_version: Literal[1] = 1
+    revision: int = 0
     task_id: str
-    task_type: Literal["skill.execute", "office.parse_pipeline", "parse.intent"]
+    task_type: Literal["parse.intent"] = "parse.intent"
+    file_id: str
     status: TaskStatus = "queued"
-    data_id: str | None = None
-    callback: str | None = None
-    callback_status: CallbackStatus = "not_requested"
-    callback_status_code: int | None = None
-    callback_error: str | None = None
+    goal: str | None = None
+    data_id: str | None = Field(default=None, max_length=128)
+    retry_of: str | None = None
+    cancel_requested: bool = False
+    plan: dict[str, Any] | None = None
+    result: TaskResultEnvelope | None = None
+    error: dict[str, Any] | None = None
+    warnings: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     duration_ms: int | None = None
-    result: dict[str, Any] | None = None
-    error: dict[str, Any] | None = None
-    plan: dict[str, Any] | None = None
-    request: dict[str, Any] = Field(default_factory=dict, exclude=True)
 
 
 class TaskSubmitResponse(BaseModel):
     task_id: str
+    file_id: str
     status: Literal["queued"]
     queue_position: int
     created_at: datetime
+    links: dict[str, str]
+
+
+class TaskListResponse(BaseModel):
+    items: list[TaskRecord]
+    next_cursor: str | None = None
 
 
 class TaskMetrics(BaseModel):
@@ -88,3 +74,22 @@ class TaskMetrics(BaseModel):
     completed_tasks: int
     max_concurrent_executions: int
     max_queue_size: int
+
+
+class ArtifactRecord(BaseModel):
+    artifact_id: str
+    filename: str
+    content_type: str | None = None
+    size_bytes: int
+    created_at: datetime = Field(default_factory=utc_now)
+    kind: str = "file"
+
+
+class ArtifactListResponse(BaseModel):
+    task_id: str
+    artifacts: list[ArtifactRecord]
+
+
+TERMINAL_STATUSES = {"succeeded", "partial", "failed", "cancelled", "interrupted"}
+ACTIVE_STATUSES = {"queued", "planning", "running", "cancelling"}
+"""States which must never be deleted while referenced by a running worker."""

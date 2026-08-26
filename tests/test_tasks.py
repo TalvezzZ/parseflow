@@ -1,216 +1,124 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import httpx
 import pytest
 
 from app.main import app
-from app.tasks.manager import InMemoryTaskManager, TaskQueueFullError
-from app.tasks.models import TaskRecord
+from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
+from app.tasks.models import TaskRecord, TaskResultEnvelope
+from app.tasks.repository import FileTaskRepository, TaskRevisionConflictError
 
 
-async def post(path: str, payload: dict) -> httpx.Response:
+async def request(method: str, path: str, **kwargs) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        return await client.post(path, json=payload)
-
-
-async def get(path: str) -> httpx.Response:
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        return await client.get(path)
+        return await client.request(method, path, **kwargs)
 
 
 async def wait_for_terminal(task_id: str) -> dict:
     for _ in range(100):
-        response = await get(f"/api/v1/tasks/{task_id}")
+        response = await request("GET", f"/api/v1/tasks/{task_id}")
         assert response.status_code == 200, response.text
         task = response.json()
-        if task["status"] in {"succeeded", "failed", "cancelled"}:
+        if task["status"] in {"succeeded", "partial", "failed", "cancelled", "interrupted"}:
             return task
         await asyncio.sleep(0.02)
     raise AssertionError("任务未在测试时间内结束")
 
 
-def make_xlsx(path: Path) -> None:
-    from openpyxl import Workbook
-
-    workbook = Workbook()
-    workbook.active.append(["name", "value"])
-    workbook.active.append(["task", 1])
-    workbook.save(path)
-
-
 @pytest.mark.asyncio
-async def test_skill_task_api_executes_and_preserves_data_id(tmp_path: Path) -> None:
-    source = tmp_path / "task.xlsx"
-    make_xlsx(source)
-
-    response = await post("/api/v1/tasks/skill", {
-        "skill_name": "excel.parse",
-        "file_id": "task-xlsx",
-        "path": str(source),
-        "data_id": "customer-001",
-    })
+async def test_upload_only_task_api_returns_path_free_normalized_result() -> None:
+    response = await request("POST", "/api/v1/tasks/parse", files={"file": ("task.json", b'{"name":"task"}', "application/json")}, data={"data_id": "customer-001"})
 
     assert response.status_code == 202, response.text
     submitted = response.json()
-    assert submitted["status"] == "queued"
+    assert set(submitted) == {"task_id", "file_id", "status", "queue_position", "created_at", "links"}
+    assert "path" not in response.text and "callback" not in response.text
     task = await wait_for_terminal(submitted["task_id"])
     assert task["status"] == "succeeded"
     assert task["data_id"] == "customer-001"
-    assert task["result"]["skill_name"] == "excel.parse"
-    assert task["callback_status"] == "not_requested"
+    assert task["result"]["document"]["document_type"] == "json"
+    assert task["result"]["file_id"] == submitted["file_id"]
+    assert "path" not in json.dumps(task)
 
 
 @pytest.mark.asyncio
-async def test_manager_limits_queue_and_cancels_queued_task() -> None:
-    release = asyncio.Event()
-    running = asyncio.Event()
+async def test_persistent_manager_recovers_queued_and_marks_active_interrupted(tmp_path: Path) -> None:
+    repository = FileTaskRepository(tmp_path / "tasks")
+    queued = TaskRecord(task_id="task_" + "1" * 32, file_id="file_" + "a" * 32)
+    running = TaskRecord(task_id="task_" + "2" * 32, file_id="file_" + "b" * 32, status="running")
+    await repository.create(queued)
+    await repository.create(running)
 
-    async def runner(_: TaskRecord) -> dict:
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
+        return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
+
+    manager = PersistentTaskManager(runner, repository, max_concurrent_executions=1)
+    await manager.start()
+    try:
+        for _ in range(50):
+            finished = await manager.get(queued.task_id)
+            if finished and finished.status == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+        assert (await manager.get(queued.task_id)).status == "succeeded"
+        assert (await manager.get(running.task_id)).status == "interrupted"
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_repository_enforces_revision_and_quarantines_invalid_json(tmp_path: Path) -> None:
+    repository = FileTaskRepository(tmp_path / "tasks")
+    record = TaskRecord(task_id="task_" + "3" * 32, file_id="file_" + "c" * 32)
+    await repository.create(record)
+    updated = await repository.update(record.task_id, 0, lambda item: setattr(item, "goal", "extract"))
+    assert updated.revision == 1
+    with pytest.raises(TaskRevisionConflictError):
+        await repository.update(record.task_id, 0, lambda _: None)
+    invalid = tmp_path / "tasks" / ("task_" + "4" * 32 + ".json")
+    invalid.write_text("not json", encoding="utf-8")
+    await repository.recover()
+    assert not invalid.exists()
+    assert (tmp_path / "tasks" / "quarantine" / invalid.name).exists()
+
+
+@pytest.mark.asyncio
+async def test_persistent_manager_limits_queue_and_cancels_queued_task(tmp_path: Path) -> None:
+    release, running = asyncio.Event(), asyncio.Event()
+
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
         running.set()
         await release.wait()
-        return {"status": "success"}
+        return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
 
-    manager = InMemoryTaskManager(runner, max_concurrent_executions=1, max_queue_size=1)
+    manager = PersistentTaskManager(runner, FileTaskRepository(tmp_path / "tasks"), max_concurrent_executions=1, max_queue_size=1)
+    await manager.start()
     try:
-        first = await manager.submit("skill.execute", {}, None, None)
+        first = await manager.submit_parse("file_" + "d" * 32, None, None)
         await asyncio.wait_for(running.wait(), timeout=1)
-        second = await manager.submit("skill.execute", {}, None, None)
-        with pytest.raises(TaskQueueFullError) as error:
-            await manager.submit("skill.execute", {}, None, None)
-        assert error.value.queued_tasks == 1
-        cancelled = manager.cancel(second.task_id)
-        assert cancelled is not None
-        assert cancelled.status == "cancelled"
+        second = await manager.submit_parse("file_" + "e" * 32, None, None)
+        with pytest.raises(TaskQueueFullError):
+            await manager.submit_parse("file_" + "f" * 32, None, None)
+        assert (await manager.cancel(second.task_id)).status == "cancelled"
         release.set()
         for _ in range(50):
-            if manager.get(first.task_id).status == "succeeded":
+            if (await manager.get(first.task_id)).status == "succeeded":
                 break
             await asyncio.sleep(0.01)
-        assert manager.get(first.task_id).status == "succeeded"
+        assert (await manager.get(first.task_id)).status == "succeeded"
     finally:
         await manager.stop()
 
 
-@pytest.mark.asyncio
-async def test_manager_records_timeout_and_finishes_task() -> None:
-    async def runner(_: TaskRecord) -> dict:
-        await asyncio.sleep(0.2)
-        return {"status": "success"}
-
-    manager = InMemoryTaskManager(runner, default_timeout_seconds=0)
-    try:
-        submitted = await manager.submit("skill.execute", {}, None, None)
-        for _ in range(50):
-            record = manager.get(submitted.task_id)
-            if record and record.status == "failed":
-                break
-            await asyncio.sleep(0.01)
-        record = manager.get(submitted.task_id)
-        assert record is not None
-        assert record.status == "failed"
-        assert record.error is not None
-        assert record.error["code"] == "task_timeout"
-        assert record.finished_at is not None
-        assert record.duration_ms is not None
-    finally:
-        await manager.stop()
-
-
-@pytest.mark.asyncio
-async def test_manager_cleans_expired_terminal_tasks() -> None:
-    async def runner(_: TaskRecord) -> dict:
-        return {"status": "success"}
-
-    manager = InMemoryTaskManager(runner, result_ttl_seconds=0)
-    try:
-        submitted = await manager.submit("skill.execute", {}, None, None)
-        for _ in range(50):
-            record = manager.get(submitted.task_id)
-            if record and record.status == "succeeded":
-                break
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.01)
-        manager._cleanup_expired()
-        assert manager.get(submitted.task_id) is None
-    finally:
-        await manager.stop()
-
-
-@pytest.mark.asyncio
-async def test_callback_non_200_does_not_change_execution_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    received: list[dict] = []
-
-    class MockClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args) -> None:
-            return None
-
-        async def post(self, url: str, json: dict) -> httpx.Response:
-            received.append({"url": url, "payload": json})
-            return httpx.Response(502)
-
-    monkeypatch.setattr("app.tasks.manager.httpx.AsyncClient", MockClient)
-
-    async def runner(_: TaskRecord) -> dict:
-        return {"status": "success", "value": "done"}
-
-    manager = InMemoryTaskManager(runner)
-    try:
-        submitted = await manager.submit("skill.execute", {"timeout_seconds": 10}, "business-1", "https://example.test/callback")
-        for _ in range(50):
-            record = manager.get(submitted.task_id)
-            if record and record.status == "succeeded" and record.callback_status == "failed":
-                break
-            await asyncio.sleep(0.01)
-        record = manager.get(submitted.task_id)
-        assert record is not None
-        assert record.status == "succeeded"
-        assert record.callback_status == "failed"
-        assert record.callback_status_code == 502
-        assert received[0]["payload"]["data_id"] == "business-1"
-    finally:
-        await manager.stop()
-
-
-@pytest.mark.asyncio
-async def test_callback_http_200_is_recorded_as_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    class MockClient:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args) -> None:
-            return None
-
-        async def post(self, url: str, json: dict) -> httpx.Response:
-            return httpx.Response(200)
-
-    monkeypatch.setattr("app.tasks.manager.httpx.AsyncClient", MockClient)
-
-    async def runner(_: TaskRecord) -> dict:
-        return {"status": "success"}
-
-    manager = InMemoryTaskManager(runner)
-    try:
-        submitted = await manager.submit("skill.execute", {}, None, "https://example.test/callback")
-        for _ in range(50):
-            record = manager.get(submitted.task_id)
-            if record and record.callback_status == "succeeded":
-                break
-            await asyncio.sleep(0.01)
-        assert manager.get(submitted.task_id).status == "succeeded"
-        assert manager.get(submitted.task_id).callback_status == "succeeded"
-    finally:
-        await manager.stop()
+def test_openapi_has_no_path_callback_or_output_directory_public_inputs() -> None:
+    schema = app.openapi()
+    serialized = json.dumps(schema)
+    assert "/api/v1/tasks/parse" in serialized
+    assert '"callback"' not in serialized
+    assert '"output_dir"' not in serialized
+    assert '"path"' not in serialized.replace('"in": "path"', '"in": "route_parameter"')

@@ -53,9 +53,14 @@ async def test_pipeline_converts_legacy_xls_then_parses(tmp_path: Path) -> None:
     assert result.result["conversion"]["target_format"] == "xlsx"
 
 
-def test_mcp_server_exposes_core_tools() -> None:
+def test_remote_mcp_exposes_only_opaque_id_tools() -> None:
     from app.mcp_server import mcp
 
     tools = mcp._tool_manager.list_tools()
     names = {tool.name for tool in tools}
-    assert {"list_skills", "execute_skill", "parse_office_pipeline", "preview_parse_plan", "submit_parse_intent"}.issubset(names)
+    assert names == {"list_skills", "preview_parse_plan", "submit_file_id", "get_task", "cancel_task", "list_artifacts"}
+    for tool in tools:
+        schema = str(tool.parameters)
+        assert "path" not in schema
+        assert "output_dir" not in schema
+        assert "callback" not in schema

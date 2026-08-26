@@ -64,7 +64,7 @@ def read_text_source(source: Path, max_bytes: int, reject_binary: bool = True) -
 
 
 class PlainTextProvider(Provider):
-    manifest = ProviderManifest(name="text.normal.stdlib", version="0.7.1", kind="text_parser", modes=["normal"],
+    manifest = ProviderManifest(name="text.normal.stdlib", version="0.8.0", kind="text_parser", modes=["normal"],
                                 capabilities=["text", "markdown", "html", "xml", "rtf", "csv", "tsv", "tables"])
 
     def __init__(self, max_file_size_mb: int = 20, max_table_rows: int = 100_000, max_table_columns: int = 1_000,
@@ -246,7 +246,7 @@ class PlainTextProvider(Provider):
 
 class RawSourceProvider(Provider):
     """Read allowlisted text-like files without interpreting their contents."""
-    manifest = ProviderManifest(name="text.raw.source", version="0.7.1", kind="text_parser", modes=["normal", "fallback"],
+    manifest = ProviderManifest(name="text.raw.source", version="0.8.0", kind="text_parser", modes=["normal", "fallback"],
                                 capabilities=["raw_source", "text", "markdown"])
 
     def __init__(self, max_file_size_mb: int = 20) -> None:
@@ -277,7 +277,7 @@ class RawSourceProvider(Provider):
 
 class TextParseSkill(Skill):
     name = "text.parse"
-    version = "0.7.1"
+    version = "0.8.0"
     suffixes = TEXT_SUFFIXES
 
     def __init__(self, providers: ProviderRegistry, normal_provider: str = "text.normal.stdlib", raw_provider: str = "text.raw.source") -> None:

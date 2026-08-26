@@ -2,7 +2,7 @@
 
 ## 1. 当前基线
 
-当前稳定标签为 `v0.7.0`。已具备：
+当前稳定标签为 `v0.7.1`。已具备：
 
 - PDF、DOCX、Excel、PowerPoint、RTF、HTML、XML、CSV/TSV、图片、音视频预处理。
 - 扫描 PDF 和独立图片的本地 PaddleOCR。
@@ -12,7 +12,7 @@
 - 前后端、LibreOffice、FFmpeg 和 OCR 的单容器 Docker 部署。
 - 本地 stdio MCP 与带 API Key 的远程 Streamable HTTP MCP。
 
-当前自动化回归基线为 `124 passed`，Web 生产构建可通过。任务状态仍为进程内存，公开路径型 API、callback 和 Docker 鉴权边界将在后续版本收敛。
+`v0.7.1` 自动化回归与 Web 生产构建已通过。`v0.8.0` 正在将公开入口收敛为不透明 ID、文件持久化任务和无 callback 的轮询模型。
 
 ## 2. 产品演进原则
 

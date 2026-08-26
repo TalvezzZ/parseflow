@@ -1,13 +1,16 @@
-"""Parse Agent MCP Server，默认通过 stdio 提供工具。"""
+"""Remote-safe ParseFlow MCP server: only opaque file/task identifiers cross the boundary."""
 
-from app.documents.models import FileInput, OfficePipelineRequest, ParseContext
+from pathlib import Path
+
+from app.storage.ids import is_valid_id
 from app.version import __version__
 
 
 def runtime():
-    """Import runtime singletons lazily to support both stdio and HTTP mounting."""
-    from app.main import executor, pipeline, planner, task_manager, registry
-    return executor, pipeline, planner, task_manager, registry
+    """Import runtime singletons lazily to support standalone stdio and HTTP mounting."""
+    from app.main import artifact_repository, file_store, planner, registry, task_manager
+    return artifact_repository, file_store, planner, registry, task_manager
+
 
 try:
     from mcp.server import MCPServer
@@ -20,61 +23,64 @@ mcp = MCPServer("parse-agent", version=__version__)
 
 @mcp.tool()
 def list_skills() -> list[dict]:
-    """列出可用的顶层 Skill 及其能力。"""
-    *_, registry = runtime()
+    """列出可用顶层 Skill 及其能力。"""
+    *_, registry, _ = runtime()
     return registry.list_manifests()
 
 
 @mcp.tool()
-async def execute_skill(skill_name: str, file_id: str, path: str, filename: str = "", mime_type: str = "") -> dict:
-    """执行一个顶层 Skill；不会直接暴露底层 Provider。"""
-    executor, _, _, _, _ = runtime()
-    context = ParseContext(file=FileInput(file_id=file_id, path=path, filename=filename or None, mime_type=mime_type or None))
-    result = await executor.execute(skill_name, context)
-    return result.model_dump()
-
-
-@mcp.tool()
-def preview_parse_plan(path: str, goal: str = "") -> dict:
-    """预览规则计划，不执行文件解析；调用方可据此理解自动路由。"""
+def preview_parse_plan(filename_or_suffix: str, goal: str = "") -> dict:
+    """仅按展示文件名或后缀预览路由；绝不读取服务端或客户端路径。"""
     _, _, planner, _, _ = runtime()
-    return planner.create(path, goal or None).model_dump(mode="json")
+    candidate = filename_or_suffix.strip()
+    if candidate.startswith(".") and "/" not in candidate and "\\" not in candidate:
+        candidate = f"preview{candidate}"
+    # Path.name deliberately discards any supplied directory portion before planning.
+    return planner.create(Path(candidate).name, goal or None).model_dump(mode="json")
 
 
 @mcp.tool()
-async def submit_parse_intent(file_id: str, path: str, goal: str = "", data_id: str = "", callback: str = "") -> dict:
-    """提交自动规划任务；MCP 客户端提供可访问的本地文件路径。"""
-    _, _, _, task_manager, _ = runtime()
-    request = {"file_id": file_id, "path": path, "goal": goal or None}
-    submitted = await task_manager.submit("parse.intent", request, data_id or None, callback or None)
+async def submit_file_id(file_id: str, goal: str = "", data_id: str = "") -> dict:
+    """Submit an already uploaded opaque file ID for asynchronous automatic parsing."""
+    _, file_store, _, _, task_manager = runtime()
+    if not is_valid_id("file", file_id) or file_store.get(file_id) is None:
+        return {"error": {"code": "file_not_found", "message": "未找到文件"}}
+    submitted = await task_manager.submit_parse(file_id, goal or None, data_id or None)
     return submitted.model_dump(mode="json")
 
 
 @mcp.tool()
-async def parse_office_pipeline(
-    file_id: str,
-    path: str,
-    filename: str = "",
-    mime_type: str = "",
-    output_dir: str = "",
-    timeout_seconds: int = 300,
-) -> dict:
-    """将旧版 Office 转换为现代格式并自动调用对应解析 Skill。"""
-    request = OfficePipelineRequest(
-        file_id=file_id,
-        path=path,
-        filename=filename or None,
-        mime_type=mime_type or None,
-        output_dir=output_dir or None,
-        timeout_seconds=timeout_seconds,
-    )
-    _, pipeline, _, _, _ = runtime()
-    result = await pipeline.execute(request.to_context())
-    return result.model_dump()
+async def get_task(task_id: str) -> dict:
+    """Fetch one persistent task by opaque ID."""
+    *_, task_manager = runtime()
+    if not is_valid_id("task", task_id):
+        return {"error": {"code": "task_not_found", "message": "未找到任务"}}
+    task = await task_manager.get(task_id)
+    return task.model_dump(mode="json") if task else {"error": {"code": "task_not_found", "message": "未找到任务"}}
+
+
+@mcp.tool()
+async def cancel_task(task_id: str) -> dict:
+    """Cancel a queued task or request cooperative cancellation for a running task."""
+    *_, task_manager = runtime()
+    if not is_valid_id("task", task_id):
+        return {"error": {"code": "task_not_found", "message": "未找到任务"}}
+    task = await task_manager.cancel(task_id)
+    return task.model_dump(mode="json") if task else {"error": {"code": "task_not_found", "message": "未找到任务"}}
+
+
+@mcp.tool()
+async def list_artifacts(task_id: str) -> list[dict]:
+    """List task artifacts by opaque artifact IDs; download uses the REST artifact endpoint."""
+    artifact_repository, _, _, _, task_manager = runtime()
+    if not is_valid_id("task", task_id) or await task_manager.get(task_id) is None:
+        return []
+    return [item.model_dump(mode="json") | {"download_url": f"/api/v1/tasks/{task_id}/artifacts/{item.artifact_id}"}
+            for item in artifact_repository.list(task_id)]
 
 
 def main() -> None:
-    """以 stdio 方式启动 MCP Server。"""
+    """Run the same opaque-ID-safe MCP profile over stdio."""
     mcp.run("stdio")
 
 

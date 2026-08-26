@@ -1,109 +1,100 @@
+from __future__ import annotations
+
 from contextlib import asynccontextmanager
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-
-from app.files import LocalFileStore, StoredFile
-from app.observability import HttpMetrics, logger
-from app.planning.rule_planner import RuleBasedPlanner
-from app.planning.models import now
+from mcp.server.transport_security import TransportSecuritySettings
 
 from app.agent.executor import SkillExecutor
 from app.agent.pipeline import OfficeParsePipeline
 from app.config import get_settings
-from app.documents.models import DocumentParseRequest, FileConversionRequest, MediaPrepareRequest, OfficePipelineRequest, PdfParseRequest, PipelineResult, SkillResult
-from app.tasks.manager import InMemoryTaskManager, TaskQueueFullError
-from app.tasks.models import TaskMetrics, TaskOfficePipelineRequest, TaskRecord, TaskSkillRequest, TaskSubmitResponse
-from app.skills.registry import create_default_registry
+from app.documents.models import FileInput, ParseContext
+from app.files import LocalFileStore, StoredFilePublic
+from app.observability import HttpMetrics, logger
+from app.planning.models import now
+from app.planning.rule_planner import RuleBasedPlanner
 from app.skills.office.adapters.libreoffice import LibreOfficeProvider
+from app.skills.registry import create_default_registry
+from app.tasks.artifacts import ArtifactRepository
+from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
+from app.tasks.models import ArtifactListResponse, TaskListResponse, TaskRecord, TaskResultEnvelope, TaskSubmitResponse
+from app.tasks.repository import FileTaskRepository
 from app.version import __version__
 
-
 settings = get_settings()
-file_store = LocalFileStore(settings.file_storage_dir, settings.file_max_size_mb, settings.file_allowed_suffixes)
+data_root = Path(settings.data_dir).resolve()
+file_store = LocalFileStore(str(data_root / "files"), settings.file_max_size_mb, settings.file_allowed_suffixes)
+task_repository = FileTaskRepository(data_root / "tasks")
+artifact_repository = ArtifactRepository(data_root / "artifacts")
 http_metrics = HttpMetrics()
 registry = create_default_registry()
 planner = RuleBasedPlanner(registry)
 executor = SkillExecutor(registry)
-pipeline = OfficeParsePipeline(
-    executor,
-    LibreOfficeProvider(command=settings.office_converter_command, timeout_seconds=settings.office_converter_timeout_seconds),
-)
+pipeline = OfficeParsePipeline(executor, LibreOfficeProvider(command=settings.office_converter_command, timeout_seconds=settings.office_converter_timeout_seconds))
 
 
-async def run_task(record: TaskRecord) -> dict:
-    """复用现有确定性执行器；任务层不会直接调用 Provider。"""
-    if record.task_type == "skill.execute":
-        request = TaskSkillRequest.model_validate(record.request)
-        context = request.to_context()
-        if artifact_dir := file_store.artifact_dir(request.file_id):
-            context.metadata["artifact_dir"] = str(artifact_dir)
-        return (await executor.execute(request.skill_name, context)).model_dump()
-    if record.task_type == "office.parse_pipeline":
-        request = TaskOfficePipelineRequest.model_validate(record.request)
-        context = request.to_context()
-        if artifact_dir := file_store.artifact_dir(request.file_id):
-            context.metadata["output_dir"] = str(artifact_dir)
-            context.metadata["artifact_dir"] = str(artifact_dir)
-        return (await pipeline.execute(context)).model_dump()
-    if record.task_type == "parse.intent":
-        return await run_parse_intent(record)
-    raise ValueError(f"未知任务类型: {record.task_type}")
+def _public_document(value: object) -> dict | None:
+    """Project the internal DocumentResult dump into a path-free public document."""
+    if not isinstance(value, dict):
+        return None
+    document = dict(value)
+    source = document.get("source_file")
+    if isinstance(source, dict):
+        document["source_file"] = {key: item for key, item in source.items() if key != "path"}
+    return document
 
 
-async def run_parse_intent(record: TaskRecord) -> dict:
-    """任务 Worker 内部完成规划、策略校验和唯一顶层步骤执行。"""
-    record.status = "planning"
-    request = record.request
-    plan = planner.create(str(request["path"]), request.get("goal"))
-    record.plan = plan.model_dump(mode="json")
+async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
+    stored = file_store.get(record.file_id)
+    source_path = file_store.source_path(record.file_id)
+    if stored is None or source_path is None:
+        return TaskResultEnvelope(status="failed", file_id=record.file_id, error={"code": "file_not_found", "message": "上传文件不存在", "retryable": False})
+    plan = planner.create(stored.filename, record.goal)
     step = plan.steps[0]
-    step.status = "running"
-    step.started_at = now()
-    plan.status = "running"
-    record.plan = plan.model_dump(mode="json")
-    from app.documents.models import FileInput, ParseContext
-    context = ParseContext(file=FileInput(file_id=str(request["file_id"]), path=str(request["path"]), filename=request.get("filename"), mime_type=request.get("mime_type")))
-    if artifact_dir := file_store.artifact_dir(str(request["file_id"])):
-        context.metadata["artifact_dir"] = str(artifact_dir)
-        context.metadata["output_dir"] = str(artifact_dir)
-    record.status = "running"
-    if step.skill_name == "office.parse_pipeline":
-        result = (await pipeline.execute(context)).model_dump()
-    else:
-        result = (await executor.execute(step.skill_name, context)).model_dump()
+    step.status, step.started_at = "running", now()
+    def set_plan(current: TaskRecord) -> None:
+        current.plan = plan.model_dump(mode="json")
+    current = await task_repository.get(record.task_id)
+    if current:
+        await task_repository.update(current.task_id, current.revision, set_plan)
+    context = ParseContext(file=FileInput(file_id=record.file_id, path=str(source_path), filename=stored.filename, mime_type=stored.content_type))
+    workspace = artifact_repository.workspace(record.task_id)
+    context.metadata["artifact_dir"] = str(workspace)
+    context.metadata["output_dir"] = str(workspace)
+    result = (await pipeline.execute(context)).model_dump() if step.skill_name == "office.parse_pipeline" else (await executor.execute(step.skill_name, context)).model_dump()
     step.finished_at = now()
     step.status = "succeeded" if result["status"] == "success" else "partial" if result["status"] == "partial" else "failed"
     step.error = result.get("error")
-    document = (result.get("data") or result.get("result") or {}).get("document", {})
-    step.result_summary = {"document_type": document.get("document_type"), "tables": len(document.get("tables", [])), "images": len(document.get("images", []))}
+    payload = result.get("data") or result.get("result") or {}
+    document = _public_document(payload.get("document") if isinstance(payload, dict) else None)
+    step.result_summary = {"document_type": (document or {}).get("document_type"), "tables": len((document or {}).get("tables", []))}
     plan.status = "completed" if step.status in {"succeeded", "partial"} else "failed"
-    record.plan = plan.model_dump(mode="json")
-    return {"status": result["status"], "file_id": str(request["file_id"]), "plan": record.plan, "result": result,
-            "warnings": plan.warnings, "error": result.get("error")}
+    current = await task_repository.get(record.task_id)
+    if current:
+        await task_repository.update(current.task_id, current.revision, lambda item: setattr(item, "plan", plan.model_dump(mode="json")))
+    artifacts = artifact_repository.collect(record.task_id)
+    public_artifacts = [item.model_dump(mode="json") | {"download_url": f"/api/v1/tasks/{record.task_id}/artifacts/{item.artifact_id}"} for item in artifacts]
+    status = "succeeded" if result["status"] == "success" else "partial" if result["status"] == "partial" else "failed"
+    return TaskResultEnvelope(status=status, file_id=record.file_id, document=document, artifacts=public_artifacts,
+                              steps=[step.model_dump(mode="json")], warnings=list(result.get("warnings") or []),
+                              metrics={}, error=result.get("error"))
 
 
-task_manager = InMemoryTaskManager(
-    run_task,
-    max_concurrent_executions=settings.task_max_concurrent_executions,
-    max_queue_size=settings.task_queue_max_size,
-    default_timeout_seconds=settings.task_default_timeout_seconds,
-    result_ttl_seconds=settings.task_result_ttl_seconds,
-    cleanup_interval_seconds=settings.task_cleanup_interval_seconds,
-    callback_timeout_seconds=settings.task_callback_timeout_seconds,
-)
+task_manager = PersistentTaskManager(run_parse_intent, task_repository, max_concurrent_executions=settings.task_max_concurrent_executions,
+                                     max_queue_size=settings.task_queue_max_size, default_timeout_seconds=settings.task_default_timeout_seconds,
+                                     result_ttl_seconds=settings.task_result_ttl_seconds, cleanup_interval_seconds=settings.task_cleanup_interval_seconds)
 
-# Imported after the shared runtime singletons are ready; MCP tool handlers
-# import these lazily so the standalone stdio entry point remains supported.
 from app.mcp_server import mcp
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await task_manager.start()
     async with mcp.session_manager.run():
         try:
             yield
@@ -112,19 +103,12 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Parse Agent", version=__version__, description="基于 LangChain 和 Skill 的文档解析 Agent", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_credentials=False, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["*"])
 
 
 @app.middleware("http")
 async def observe_and_authenticate(request: Request, call_next):
-    request_id = request.headers.get("X-Request-ID") or uuid4().hex
-    started = perf_counter()
+    request_id, started = request.headers.get("X-Request-ID") or uuid4().hex, perf_counter()
     is_remote_mcp = request.url.path == "/mcp" or request.url.path.startswith("/mcp/")
     if is_remote_mcp and not settings.mcp_http_enabled:
         response = JSONResponse(status_code=404, content={"detail": {"code": "mcp_disabled", "message": "远程 MCP 未启用。"}})
@@ -141,20 +125,8 @@ async def observe_and_authenticate(request: Request, call_next):
     return response
 
 
-# Streamable HTTP MCP shares this exact process, registry, and in-memory task
-# manager with the REST API and web workbench. Authentication/enablement is
-# enforced by observe_and_authenticate before requests reach this mounted app.
-from mcp.server.transport_security import TransportSecuritySettings
 mcp_allowed_hosts = [item.strip() for item in settings.mcp_allowed_hosts.split(",") if item.strip()]
-app.mount(
-    "/mcp",
-    mcp.streamable_http_app(
-        streamable_http_path="/",
-        stateless_http=True,
-        transport_security=TransportSecuritySettings(allowed_hosts=mcp_allowed_hosts),
-    ),
-    name="mcp",
-)
+app.mount("/mcp", mcp.streamable_http_app(streamable_http_path="/", stateless_http=True, transport_security=TransportSecuritySettings(allowed_hosts=mcp_allowed_hosts)), name="mcp")
 
 
 @app.get("/health", tags=["系统"])
@@ -162,238 +134,85 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "service": settings.app_name}
 
 
-@app.post("/api/v1/files", response_model=StoredFile, status_code=201, tags=["文件"])
-async def upload_file(file: UploadFile = File(...)) -> StoredFile:
-    """上传文件到受控本地目录，返回可直接传给解析 API 的路径。"""
+@app.post("/api/v1/files", response_model=StoredFilePublic, status_code=201, tags=["文件"])
+async def upload_file(file: UploadFile = File(...)) -> StoredFilePublic:
     try:
-        return await file_store.save(file)
+        record = await file_store.save(file)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "upload_rejected", "message": str(exc)}) from exc
+    return file_store.public(record.file_id)  # type: ignore[return-value]
 
 
-@app.post("/api/v1/parse", response_model=TaskSubmitResponse, status_code=202, tags=["智能解析"])
-async def submit_automatic_parse(
-    file: UploadFile = File(...),
-    goal: str | None = Form(default=None),
-    data_id: str | None = Form(default=None, max_length=128),
-    callback: str | None = Form(default=None),
-) -> TaskSubmitResponse:
-    """用户只需上传一个文件；Worker 会在任务内自动规划并执行。"""
-    if not settings.task_queue_enabled:
-        raise HTTPException(status_code=503, detail={"code": "task_queue_disabled", "message": "任务队列当前未启用。"})
-    if callback and not callback.startswith(("http://", "https://")):
-        raise HTTPException(status_code=422, detail={"code": "invalid_callback", "message": "callback 必须是 HTTP 或 HTTPS URL。"})
-    try:
-        stored = await file_store.save(file)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"code": "upload_rejected", "message": str(exc)}) from exc
-    request = {"file_id": stored.file_id, "path": stored.path, "filename": stored.filename,
-               "mime_type": stored.content_type, "goal": goal or None}
-    try:
-        return await task_manager.submit("parse.intent", request, data_id, callback)
-    except TaskQueueFullError as exc:
-        raise HTTPException(status_code=429, detail={"code": "task_queue_full", "message": "当前待处理任务较多，请稍后重试。", "queued_tasks": exc.queued_tasks, "max_queue_size": exc.max_queue_size}) from exc
-
-
-@app.get("/api/v1/files/{file_id}", response_model=StoredFile, tags=["文件"])
-async def get_file(file_id: str) -> StoredFile:
-    record = file_store.get(file_id)
+@app.get("/api/v1/files/{file_id}", response_model=StoredFilePublic, tags=["文件"])
+async def get_file(file_id: str) -> StoredFilePublic:
+    record = file_store.public(file_id)
     if record is None:
-        raise HTTPException(status_code=404, detail=f"未找到文件: {file_id}")
+        raise HTTPException(status_code=404, detail={"code": "file_not_found", "message": "未找到文件"})
     return record
 
 
 @app.get("/api/v1/files/{file_id}/content", tags=["文件"])
 async def download_file(file_id: str) -> FileResponse:
-    record = file_store.get(file_id)
-    if record is None or not Path(record.path).is_file():
-        raise HTTPException(status_code=404, detail=f"未找到文件: {file_id}")
-    return FileResponse(record.path, filename=record.filename, media_type=record.content_type)
+    record, source = file_store.get(file_id), file_store.source_path(file_id)
+    if record is None or source is None:
+        raise HTTPException(status_code=404, detail={"code": "file_not_found", "message": "未找到文件"})
+    return FileResponse(source, filename=record.filename, media_type=record.content_type)
 
 
-@app.get("/api/v1/files/{file_id}/artifacts/{artifact_path:path}", tags=["文件"])
-async def download_artifact(file_id: str, artifact_path: str) -> FileResponse:
-    path = file_store.artifact_path(file_id, artifact_path)
-    if path is None:
-        raise HTTPException(status_code=404, detail="未找到 artifact")
-    return FileResponse(path, filename=path.name)
-
-
-@app.get("/api/v1/metrics", tags=["系统"])
-async def metrics() -> dict:
-    """返回轻量应用指标和当前任务队列指标。"""
-    return {"http": http_metrics.snapshot(), "tasks": task_manager.metrics().model_dump()}
-
-
-@app.post("/api/v1/tasks/skill", response_model=TaskSubmitResponse, status_code=202, tags=["任务"])
-async def submit_skill_task(request: TaskSkillRequest) -> TaskSubmitResponse:
-    """异步排队执行指定顶层 Skill。"""
-    if not settings.task_queue_enabled:
-        raise HTTPException(status_code=503, detail={"code": "task_queue_disabled", "message": "任务队列当前未启用。"})
-    if not Path(request.path).is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
+@app.post("/api/v1/tasks/parse", response_model=TaskSubmitResponse, status_code=202, tags=["任务"])
+async def submit_parse_task(file: UploadFile = File(...), goal: str | None = Form(default=None), data_id: str | None = Form(default=None, max_length=128)) -> TaskSubmitResponse:
     try:
-        return await task_manager.submit("skill.execute", request.model_dump(mode="json"), request.data_id, str(request.callback) if request.callback else None)
+        stored = await file_store.save(file)
+        return await task_manager.submit_parse(stored.file_id, goal or None, data_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "upload_rejected", "message": str(exc)}) from exc
     except TaskQueueFullError as exc:
-        raise HTTPException(status_code=429, detail={"code": "task_queue_full", "message": "当前待处理任务较多，请稍后重试。", "queued_tasks": exc.queued_tasks, "max_queue_size": exc.max_queue_size}) from exc
+        file_store.delete(stored.file_id)
+        raise HTTPException(status_code=429, detail={"code": "task_queue_full", "message": str(exc)}) from exc
 
 
-@app.post("/api/v1/tasks/office-pipeline", response_model=TaskSubmitResponse, status_code=202, tags=["任务"])
-async def submit_office_pipeline_task(request: TaskOfficePipelineRequest) -> TaskSubmitResponse:
-    """异步排队执行 Office 转换后自动解析 Pipeline。"""
-    if not settings.task_queue_enabled:
-        raise HTTPException(status_code=503, detail={"code": "task_queue_disabled", "message": "任务队列当前未启用。"})
-    if not Path(request.path).is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-    try:
-        return await task_manager.submit("office.parse_pipeline", request.model_dump(mode="json"), request.data_id, str(request.callback) if request.callback else None)
-    except TaskQueueFullError as exc:
-        raise HTTPException(status_code=429, detail={"code": "task_queue_full", "message": "当前待处理任务较多，请稍后重试。", "queued_tasks": exc.queued_tasks, "max_queue_size": exc.max_queue_size}) from exc
-
-
-@app.get("/api/v1/tasks/metrics", response_model=TaskMetrics, tags=["任务"])
-async def task_metrics() -> TaskMetrics:
-    """查看当前进程中的队列与执行统计。"""
-    return task_manager.metrics()
+@app.get("/api/v1/tasks", response_model=TaskListResponse, tags=["任务"])
+async def list_tasks(status: str | None = None, cursor: str | None = None, limit: int = Query(default=50, ge=1, le=100)) -> TaskListResponse:
+    items, next_cursor = await task_manager.list(status=status, cursor=cursor, limit=limit)
+    return TaskListResponse(items=items, next_cursor=next_cursor)
 
 
 @app.get("/api/v1/tasks/{task_id}", response_model=TaskRecord, tags=["任务"])
 async def get_task(task_id: str) -> TaskRecord:
-    """查询内存任务的当前快照；服务重启或 TTL 过期后不可查询。"""
-    task = task_manager.get(task_id)
+    task = await task_manager.get(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail=f"未找到任务: {task_id}")
+        raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": "未找到任务"})
     return task
 
 
 @app.post("/api/v1/tasks/{task_id}/cancel", response_model=TaskRecord, tags=["任务"])
 async def cancel_task(task_id: str) -> TaskRecord:
-    """仅取消尚未被 Worker 领取的排队任务。"""
-    task = task_manager.cancel(task_id)
+    task = await task_manager.cancel(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail=f"未找到任务: {task_id}")
-    if task.status != "cancelled":
-        raise HTTPException(status_code=409, detail={"code": "task_not_cancellable", "message": "仅允许取消排队中的任务"})
+        raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": "未找到任务"})
     return task
+
+
+@app.get("/api/v1/tasks/{task_id}/artifacts", response_model=ArtifactListResponse, tags=["任务"])
+async def list_artifacts(task_id: str) -> ArtifactListResponse:
+    if await task_manager.get(task_id) is None:
+        raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": "未找到任务"})
+    return ArtifactListResponse(task_id=task_id, artifacts=artifact_repository.list(task_id))
+
+
+@app.get("/api/v1/tasks/{task_id}/artifacts/{artifact_id}", tags=["任务"])
+async def download_artifact(task_id: str, artifact_id: str) -> FileResponse:
+    path = artifact_repository.download_path(task_id, artifact_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail={"code": "artifact_not_found", "message": "未找到 artifact"})
+    return FileResponse(path, filename=path.name)
+
+
+@app.get("/api/v1/metrics", tags=["系统"])
+async def metrics() -> dict:
+    return {"http": http_metrics.snapshot(), "tasks": (await task_manager.metrics()).model_dump()}
 
 
 @app.get("/api/v1/skills", tags=["Skill"])
 async def list_skills() -> list[dict]:
     return registry.list_manifests()
-
-
-@app.post("/api/v1/parse/rtf", response_model=SkillResult, tags=["解析"])
-async def parse_rtf(request: DocumentParseRequest) -> SkillResult:
-    """按复杂度自动直接解析 RTF，或转换成 DOCX 后增强解析。"""
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-    context = request.to_context()
-    if artifact_dir := file_store.artifact_dir(request.file_id):
-        context.metadata["artifact_dir"] = str(artifact_dir)
-        context.metadata["output_dir"] = str(artifact_dir)
-    return await executor.execute("rtf.parse", context)
-
-
-@app.post("/api/v1/parse/text", response_model=SkillResult, tags=["解析"])
-async def parse_text(request: DocumentParseRequest) -> SkillResult:
-    """解析 TXT、Markdown、CSV/TSV 或 HTML 文件。"""
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-    context = request.to_context()
-    if artifact_dir := file_store.artifact_dir(request.file_id):
-        context.metadata["artifact_dir"] = str(artifact_dir)
-    return await executor.execute("text.parse", context)
-
-
-@app.post("/api/v1/parse/image", response_model=SkillResult, tags=["解析"])
-async def parse_image(request: DocumentParseRequest) -> SkillResult:
-    """解析一个服务本地可访问的独立图片文件。"""
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-    return await executor.execute("image.parse", request.to_context())
-
-
-@app.post("/api/v1/parse/pdf", response_model=SkillResult, tags=["解析"])
-async def parse_pdf(request: PdfParseRequest) -> SkillResult:
-    """解析一个服务本地可访问的 PDF 文件。"""
-
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-
-    return await executor.execute("pdf.parse", request.to_context())
-
-
-@app.post("/api/v1/parse/docx", response_model=SkillResult, tags=["解析"])
-async def parse_docx(request: DocumentParseRequest) -> SkillResult:
-    """解析一个服务本地可访问的 DOCX 文件。"""
-
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-
-    return await executor.execute("word.parse", request.to_context())
-
-
-@app.post("/api/v1/convert/office", response_model=SkillResult, tags=["转换"])
-async def convert_office(request: FileConversionRequest) -> SkillResult:
-    """将本地 Office 文件转换为指定格式，不覆盖源文件。"""
-
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-
-    return await executor.execute("office.convert", request.to_context())
-
-
-@app.post("/api/v1/parse/excel", response_model=SkillResult, tags=["解析"])
-async def parse_excel(request: DocumentParseRequest) -> SkillResult:
-    """解析 XLSX/XLSM，旧版 XLS 会先转换为 XLSX。"""
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-    return await executor.execute("excel.parse", request.to_context())
-
-
-@app.post("/api/v1/parse/ppt", response_model=SkillResult, tags=["解析"])
-async def parse_ppt(request: DocumentParseRequest) -> SkillResult:
-    """解析 PPTX，旧版 PPT 会先转换为 PPTX。"""
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-    return await executor.execute("ppt.parse", request.to_context())
-
-
-@app.post("/api/v1/pipeline/parse-office", response_model=PipelineResult, tags=["Pipeline"])
-async def parse_office_pipeline(request: OfficePipelineRequest) -> PipelineResult:
-    """转换旧版 Office 并自动调用对应解析 Skill。"""
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-    try:
-        return await pipeline.execute(request.to_context())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/v1/prepare/audio", response_model=SkillResult, tags=["媒体"])
-async def prepare_audio(request: MediaPrepareRequest) -> SkillResult:
-    """探测并标准化音频，产出供后续 ASR 使用的 WAV 文件，不执行语音识别。"""
-
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-    return await executor.execute("audio.prepare", request.to_context())
-
-
-@app.post("/api/v1/prepare/video", response_model=SkillResult, tags=["媒体"])
-async def prepare_video(request: MediaPrepareRequest) -> SkillResult:
-    """探测视频、提取默认音轨并尝试导出字幕，不执行语音识别。"""
-
-    path = Path(request.path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail=f"文件不存在: {request.path}")
-    return await executor.execute("video.prepare", request.to_context())

@@ -11,7 +11,7 @@ ParseFlow accepts a single file, automatically selects an appropriate parsing wo
 - **Structured results** — normalized document model with blocks, tables, images, Markdown, plain text, provenance, warnings, and artifacts.
 - **Safe spreadsheet handling** — XLSX/XLSM semantic-cell scanning avoids traversing oversized, style-polluted used ranges.
 - **Local upload boundaries** — controlled local storage, file-size and extension limits, optional `X-API-Key` authentication, and task metrics.
-- **Developer integrations** — REST API, asynchronous task status, callbacks, and MCP over local stdio or authenticated Streamable HTTP.
+- **Developer integrations** — upload-only REST tasks, persistent polling, and opaque-ID MCP over local stdio or authenticated Streamable HTTP.
 
 ## Supported formats
 
@@ -121,18 +121,18 @@ docker compose down
 docker compose down -v
 ```
 
-> **Deployment notes:** Keep Uvicorn at one worker: the current task queue and task status are in process memory. Set `API_KEY` before exposing the service outside a trusted network; the Nginx proxy forwards it internally for the browser workbench. The direct parser endpoints accept server-local paths, so do not mount sensitive host directories into the API container. For public, untrusted use, also restrict task callback targets at the network layer because callback URLs are caller-controlled.
+> **Deployment notes:** Keep Uvicorn at one worker: v0.8.0 uses a single-process persistent task queue. Set `API_KEY` before exposing the service outside a trusted network. Public REST and remote MCP accept uploaded files or opaque IDs only; they never accept server-local paths, output directories, or callbacks.
 
 ## Configuration
 
 Copy `.env.example` to `.env` and adjust values as needed. Important settings include:
 
-- `FILE_STORAGE_DIR` — local directory for uploaded files and generated artifacts (defaults to `./data/files`)
+- `DATA_DIR` — root directory for uploaded files, persistent task JSON, and task artifacts (defaults to `./data`)
 - `FILE_MAX_SIZE_MB` and `FILE_ALLOWED_SUFFIXES` — upload boundaries
 - `API_KEY` — when non-empty, API requests require `X-API-Key`
 - `OFFICE_CONVERTER_COMMAND` — LibreOffice command, default `soffice`
 - `MEDIA_FFMPEG_COMMAND` / `MEDIA_FFPROBE_COMMAND` — media tooling commands
-- `TASK_MAX_CONCURRENT_EXECUTIONS`, `TASK_QUEUE_MAX_SIZE` — in-memory task queue limits
+- `TASK_MAX_CONCURRENT_EXECUTIONS`, `TASK_QUEUE_MAX_SIZE`, `TASK_SHUTDOWN_GRACE_SECONDS` — persistent task worker limits and shutdown behavior
 
 > **Security note:** Do not commit `.env`, uploaded files, or generated artifacts. Runtime data under `data/` is intentionally excluded from Git.
 
@@ -141,7 +141,7 @@ Copy `.env.example` to `.env` and adjust values as needed. Important settings in
 Create an automatically planned parsing task by uploading a single file:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/parse \
+curl -X POST http://127.0.0.1:8000/api/v1/tasks/parse \
   -F 'file=@./report.xlsx' \
   -F 'goal=提取表格并输出 Markdown'
 ```
@@ -243,9 +243,9 @@ Configure a remote MCP client with the endpoint and request header. The exact co
 }
 ```
 
-The endpoint is disabled by default and returns `404` until `MCP_HTTP_ENABLED=true`. It refuses to start MCP requests without `API_KEY`, even if REST API authentication is otherwise optional. This is deliberate: MCP tools accept server-local file paths. The remote endpoint runs inside the same FastAPI process as the web UI and REST API, so `submit_parse_intent` shares the same in-memory task state and task IDs with the workbench.
+The endpoint is disabled by default and returns `404` until `MCP_HTTP_ENABLED=true`. It refuses MCP requests without `API_KEY`. Remote tools never accept server-local paths, output directories, or callbacks; they operate only on already-uploaded `file_id` and `task_id` values, backed by the same persistent task store as REST.
 
-Available tools are `list_skills`, `preview_parse_plan`, `execute_skill`, `submit_parse_intent`, and `parse_office_pipeline`.
+Available tools are `list_skills`, `preview_parse_plan`, `submit_file_id`, `get_task`, `cancel_task`, and `list_artifacts`.
 
 ## Version roadmap
 
@@ -264,13 +264,13 @@ The active roadmap and detailed release plans are maintained in:
 - `app/agent/` — automatic planning and task execution
 - `app/skills/` — Skill abstraction, providers, and parsers
 - `app/documents/` — normalized document/result models
-- `app/tasks/` — in-memory task lifecycle and callbacks
+- `app/tasks/` — persistent task lifecycle, recovery, and artifact manifests
 - `web/` — React/Vite ParseFlow workbench
 - `docs/` — architecture and iteration plans
 
 ## Current limitations
 
-- The task queue is in-process memory; task state does not survive a service restart.
+- Task records are persisted locally and recover queued work after restart; active work is marked interrupted and must be explicitly resubmitted.
 - Uploaded files and artifacts use local storage; object storage and distributed queues are not included.
 - Audio/video workflows prepare media only; they do not yet produce speech-to-text output.
 

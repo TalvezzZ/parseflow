@@ -18,7 +18,7 @@ The backend suite covers:
 - OCR provider normalization, input limits, empty output, and unavailable dependencies;
 - PDF, Word, Excel, PowerPoint, RTF, CSV/TSV, HTML, XML, Office conversion, and media preparation paths;
 - upload/download lifecycle, extension rejection, artifact traversal protection, request IDs, API-key protection, and CORS preflight;
-- automatic task planning/execution, callbacks, queue capacity, cancellation, timeouts, expiry cleanup, metrics, and task result contracts;
+- persistent automatic task planning/execution, queue capacity, cancellation, restart recovery, expiry cleanup, metrics, and normalized task result contracts;
 - Excel sparse-range hardening and legacy Office conversion where local LibreOffice is available.
 
 ## Optional local OCR smoke test

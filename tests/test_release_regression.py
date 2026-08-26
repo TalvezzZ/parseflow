@@ -28,7 +28,7 @@ async def wait_for_task(task_id: str) -> dict:
         response = await request("GET", f"/api/v1/tasks/{task_id}")
         assert response.status_code == 200, response.text
         payload = response.json()
-        if payload["status"] in {"succeeded", "partial", "failed", "cancelled"}:
+        if payload["status"] in {"succeeded", "partial", "failed", "cancelled", "interrupted"}:
             return payload
         await asyncio.sleep(0.02)
     raise AssertionError("任务未在测试时限内结束")
@@ -137,14 +137,14 @@ async def test_uploaded_file_can_be_queried_and_downloaded() -> None:
 async def test_automatic_parse_csv_produces_plan_and_unified_document() -> None:
     response = await request(
         "POST",
-        "/api/v1/parse",
+        "/api/v1/tasks/parse",
         data={"goal": "提取发布数据", "data_id": "release-candidate"},
         files={"file": ("release.csv", b"name,value\nParseFlow,1\n", "text/csv")},
     )
     assert response.status_code == 202, response.text
 
     task = await wait_for_task(response.json()["task_id"])
-    document = task["result"]["result"]["data"]["document"]
+    document = task["result"]["document"]
     assert task["status"] == "succeeded"
     assert task["data_id"] == "release-candidate"
     assert task["plan"]["steps"][0]["skill_name"] == "text.parse"
@@ -154,33 +154,28 @@ async def test_automatic_parse_csv_produces_plan_and_unified_document() -> None:
 
 
 @pytest.mark.asyncio
-async def test_automatic_parse_validates_callback_before_storing_file() -> None:
+async def test_automatic_parse_ignores_removed_callback_field() -> None:
     response = await request(
         "POST",
-        "/api/v1/parse",
-        data={"callback": "ftp://invalid.example/callback"},
+        "/api/v1/tasks/parse",
+        data={"callback": "https://must-not-be-called.example", "goal": "extract"},
         files={"file": ("release.csv", b"a,b\n1,2\n", "text/csv")},
     )
 
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "invalid_callback"
+    assert response.status_code == 202
+    assert "callback" not in response.text
 
 
 @pytest.mark.asyncio
-async def test_text_parser_strips_active_html_and_rejects_unsafe_xml(tmp_path: Path) -> None:
-    html = tmp_path / "active.html"
-    xml = tmp_path / "unsafe.xml"
-    html.write_text("<html><body><script>secret()</script><style>body{}</style><h1>Safe title</h1></body></html>", encoding="utf-8")
-    xml.write_text("<!DOCTYPE root [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><root>&xxe;</root>", encoding="utf-8")
+async def test_text_parser_strips_active_html_and_rejects_unsafe_xml() -> None:
+    html_response = await request("POST", "/api/v1/tasks/parse", files={"file": ("active.html", b"<html><body><script>secret()</script><style>body{}</style><h1>Safe title</h1></body></html>", "text/html")})
+    xml_response = await request("POST", "/api/v1/tasks/parse", files={"file": ("unsafe.xml", b"<!DOCTYPE root [<!ENTITY xxe SYSTEM 'file:///etc/passwd'>]><root>&xxe;</root>", "application/xml")})
+    html_task = await wait_for_task(html_response.json()["task_id"])
+    xml_task = await wait_for_task(xml_response.json()["task_id"])
 
-    html_response = await request("POST", "/api/v1/parse/text", json={"file_id": "html-safety", "path": str(html)})
-    xml_response = await request("POST", "/api/v1/parse/text", json={"file_id": "xml-safety", "path": str(xml)})
-
-    assert html_response.status_code == 200
-    assert html_response.json()["data"]["document"]["representations"]["plain_text"] == "Safe title"
-    assert xml_response.status_code == 200
-    assert xml_response.json()["status"] == "failed"
-    assert xml_response.json()["error"]["code"] == "xml_unsafe_or_invalid"
+    assert html_task["result"]["document"]["representations"]["plain_text"] == "Safe title"
+    assert xml_task["status"] == "failed"
+    assert xml_task["error"]["code"] == "xml_unsafe_or_invalid"
 
 
 @pytest.mark.asyncio
@@ -221,7 +216,7 @@ async def test_missing_resources_and_unknown_tasks_return_not_found() -> None:
 async def test_trusted_origin_receives_cors_preflight_headers() -> None:
     response = await request(
         "OPTIONS",
-        "/api/v1/parse",
+        "/api/v1/tasks/parse",
         headers={"Origin": "http://127.0.0.1:5173", "Access-Control-Request-Method": "POST"},
     )
 

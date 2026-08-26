@@ -56,7 +56,9 @@ class Settings(BaseSettings):
     task_default_timeout_seconds: int = 1800
     task_result_ttl_seconds: int = 86400
     task_cleanup_interval_seconds: int = 300
-    task_callback_timeout_seconds: int = 15
+    task_shutdown_grace_seconds: int = 30
+    task_max_result_size_mb: int = 20
+    data_dir: str = "./data"
     file_storage_dir: str = "./data/files"
     file_max_size_mb: int = 100
     file_allowed_suffixes: str = ",".join(sorted({
