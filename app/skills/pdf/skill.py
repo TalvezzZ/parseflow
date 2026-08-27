@@ -45,7 +45,9 @@ class PdfParseSkill(Skill):
             )
 
         context.inspection = inspection
-        mode = "normal" if inspection.pdf_type == "text_based" and not inspection.ocr_recommended else "ocr"
+        requires_ocr = inspection.pdf_type != "text_based" or inspection.ocr_recommended
+        requested_ocr = context.options.strategy == "ocr_first" and self.ocr_provider is not None
+        mode = "ocr" if requires_ocr or requested_ocr else "normal"
         provider_names = self._provider_names(context, mode)
         attempts: list[dict] = []
 
@@ -88,6 +90,7 @@ class PdfParseSkill(Skill):
             if result.status in {"success", "partial"} and result.document is not None:
                 result.document.provenance["inspection"] = inspection.model_dump()
                 result.document.provenance["attempts"] = attempts
+                result.document.provenance["strategy"] = context.options.strategy
                 return SkillResult(
                     status=result.status,
                     skill_name=self.name,

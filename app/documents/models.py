@@ -17,6 +17,7 @@ class ParseOptions(BaseModel):
 
     provider: str | None = Field(default=None, description="显式指定 Provider")
     fallback_enabled: bool = Field(default=True, description="主 Provider 失败时是否允许降级")
+    strategy: Literal["auto", "text_first", "table_first", "ocr_first"] = Field(default="auto", description="服务端批准的受控解析目标")
 
 
 class PdfParseRequest(BaseModel):

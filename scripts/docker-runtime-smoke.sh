@@ -41,6 +41,8 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 test "$status" = "succeeded" -o "$status" = "partial"
+export_url="$(python3 -c 'import json,sys; r=json.load(sys.stdin)["result"]; assert r["quality"]["input_classification"] == "txt"; assert r["provenance"]["provider_chain"]; print(next(a["download_url"] for a in r["artifacts"] if a["filename"] == "document.txt"))' <<< "$task")"
+test "$(curl -fsS "http://127.0.0.1:$port$export_url")" = "ParseFlow runtime smoke"
 events="$(curl -fsS "http://127.0.0.1:$port/api/v1/tasks/$task_id/events")"
 python3 -c 'import json,sys; x=json.load(sys.stdin); assert x["items"][-1]["type"] in {"succeeded","partial"}' <<< "$events"
 if docker compose -p "$project" logs 2>&1 | grep -E '/data/|/app/data|API_KEY='; then

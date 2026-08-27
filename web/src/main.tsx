@@ -6,7 +6,7 @@ import './dashboard.css'
 type Json = Record<string, unknown>
 type TaskStatus = 'queued' | 'planning' | 'running' | 'cancelling' | 'succeeded' | 'partial' | 'failed' | 'cancelled' | 'interrupted'
 type Artifact = { artifact_id: string; filename: string; content_type?: string; size_bytes?: number; kind?: string; download_url?: string }
-type TaskResult = { status: 'succeeded' | 'partial' | 'failed'; document?: Json; artifacts: Artifact[]; steps: Json[]; conversion?: Json; warnings: string[]; metrics: Json; error?: Json }
+type TaskResult = { status: 'succeeded' | 'partial' | 'failed'; document?: Json; artifacts: Artifact[]; steps: Json[]; conversion?: Json; warnings: string[]; metrics: Json; quality?: Json; provenance?: Json; error?: Json }
 type Task = { task_id: string; file_id: string; status: TaskStatus; data_id?: string; goal?: string; retry_of?: string; created_at: string; updated_at?: string; started_at?: string; finished_at?: string; duration_ms?: number; error?: Json; plan?: Json; result?: TaskResult; warnings?: string[] }
 type TaskEvent = { sequence: number; type: string; at: string; step?: string; message?: string; details: Json }
 type SubmittedTask = { task_id: string; file_id: string; status: 'queued'; created_at: string }
@@ -118,7 +118,7 @@ function App() {
   const fileId = task?.file_id
 
   return <main className="app-shell">
-    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · 1.1.0</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className="service"><i /> 服务就绪</span></header>
+    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · 1.2.0</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className="service"><i /> 服务就绪</span></header>
     <section className="workspace-grid">
       <aside className="upload-panel"><h2>开始解析</h2><form onSubmit={submit}>
         <div className="dropzone" role="button" tabIndex={0} aria-label="选择要解析的文件" onDrop={onDrop} onDragOver={(event) => event.preventDefault()} onClick={openFilePicker} onKeyDown={onDropzoneKeyDown}>
@@ -177,14 +177,14 @@ function CopyButton({ text }: { text: string }) {
 function ArtifactItem({ artifact, taskId, index }: { artifact: Artifact; taskId: string; index: number }) {
  const filename = artifact.filename || `产物 ${index + 1}`
  const downloadUrl = artifact.download_url || `/api/v1/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(artifact.artifact_id)}`
- return <div className="artifact"><span aria-hidden="true">⌁</span><div><strong>{filename}</strong><small>{artifact.kind || '文件产物'}</small></div><a href={downloadUrl} download={filename}>下载</a></div>
+ return <div className="artifact"><span aria-hidden="true">⌁</span><div><strong>{filename}</strong><small>{artifact.kind === 'export' ? '结果导出' : artifact.kind || '文件产物'}{artifact.size_bytes ? ` · ${fileSize(artifact.size_bytes)}` : ''}</small></div><a href={downloadUrl} download={filename}>下载</a></div>
 }
 function ResultTab({ tab, task, document, fileId: _fileId, tables, representations, artifacts }: { tab: string; task: Task; document?: Json; fileId?: string; tables: Json[]; representations: Json; artifacts: Artifact[] }) {
  const plainText = String(representations.plain_text || '当前结果没有可用的纯文本表示。')
  const markdown = String(representations.markdown || '当前结果没有可用的 Markdown 表示。')
  const details = JSON.stringify({ plan: task.plan, error: task.error, warnings: task.warnings, result: task.result }, null, 2)
  const structured = JSON.stringify(document || task, null, 2)
- if (tab === 'overview') return <div className="overview"><Stat label="文档类型" value={String(document?.document_type || '等待结果')} /><Stat label="表格" value={String(tables.length)} /><Stat label="图片 / 产物" value={String((document?.images as Json[] | undefined)?.length || 0)} /><Stat label="任务状态" value={statusLabels[task.status]} /><section><h3>解析摘要</h3><p>{plainText.slice(0, 600)}</p></section></div>
+ if (tab === 'overview') { const quality = task.result?.quality || {}; const provenance = task.result?.provenance || {}; const providers = Array.isArray(provenance.provider_chain) ? provenance.provider_chain.join(' → ') : '未知'; return <div className="overview"><Stat label="文档类型" value={String(document?.document_type || '等待结果')} /><Stat label="输入分类" value={String(quality.input_classification || '未知')} /><Stat label="表格" value={String(quality.tables ?? tables.length)} /><Stat label="图片" value={String(quality.images ?? ((document?.images as Json[] | undefined)?.length || 0))} /><Stat label="Provider 链路" value={providers} /><Stat label="截断" value={quality.truncated ? '是' : '否'} /><section><h3>解析摘要</h3><p>{plainText.slice(0, 600)}</p></section></div> }
  if (tab === 'text') return <><CopyButton text={plainText} /><pre className="text-preview">{plainText}</pre></>
  if (tab === 'markdown') return <><CopyButton text={markdown} /><pre className="text-preview markdown">{markdown}</pre></>
  if (tab === 'html') return representations.html ? <iframe className="html-preview" title="HTML 内容预览" sandbox="" srcDoc={String(representations.html)} /> : <NoContent text="当前结果没有可用的 HTML 表示。" />

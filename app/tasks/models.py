@@ -27,6 +27,8 @@ class TaskResultEnvelope(BaseModel):
     conversion: dict[str, Any] | None = None
     warnings: list[str] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
+    quality: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
     error: dict[str, Any] | None = None
 
 

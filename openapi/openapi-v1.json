@@ -518,6 +518,16 @@
             "title": "Metrics",
             "type": "object"
           },
+          "provenance": {
+            "additionalProperties": true,
+            "title": "Provenance",
+            "type": "object"
+          },
+          "quality": {
+            "additionalProperties": true,
+            "title": "Quality",
+            "type": "object"
+          },
           "status": {
             "enum": [
               "succeeded",
@@ -638,7 +648,7 @@
   "info": {
     "description": "基于 LangChain 和 Skill 的文档解析 Agent",
     "title": "Parse Agent",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "openapi": "3.1.0",
   "paths": {

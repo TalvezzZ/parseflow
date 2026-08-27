@@ -15,7 +15,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from app.agent.executor import SkillExecutor
 from app.agent.pipeline import OfficeParsePipeline
 from app.config import get_settings
-from app.documents.models import FileInput, ParseContext
+from app.documents.models import FileInput, ParseContext, ParseOptions
 from app.files import LocalFileStore, StoredFilePublic
 from app.observability import HttpMetrics, JsonFormatter, logger
 from app.planning.models import now
@@ -24,6 +24,7 @@ from app.skills.office.adapters.libreoffice import LibreOfficeProvider
 from app.skills.registry import create_default_registry
 from app.tasks.artifacts import ArtifactRepository
 from app.tasks.events import TaskEventList
+from app.tasks.exports import ExportLimitExceeded, generate_document_exports
 from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
 from app.tasks.models import ArtifactListResponse, TaskListResponse, TaskRecord, TaskResultEnvelope, TaskSubmitResponse
 from app.tasks.repository import FileTaskRepository
@@ -49,14 +50,57 @@ pipeline = OfficeParsePipeline(executor, LibreOfficeProvider(command=settings.of
 
 
 def _public_document(value: object) -> dict | None:
-    """Project the internal DocumentResult dump into a path-free public document."""
-    if not isinstance(value, dict):
-        return None
-    document = dict(value)
-    source = document.get("source_file")
-    if isinstance(source, dict):
-        document["source_file"] = {key: item for key, item in source.items() if key != "path"}
-    return document
+    """Recursively project an internal DocumentResult into a path-free public document."""
+    forbidden = {"path", "output_dir", "source_path", "target_path", "artifact_path", "callback"}
+
+    def sanitize(item: object) -> object:
+        if isinstance(item, dict):
+            return {key: sanitize(child) for key, child in item.items() if key not in forbidden}
+        if isinstance(item, list):
+            return [sanitize(child) for child in item]
+        return item
+
+    return sanitize(value) if isinstance(value, dict) else None
+
+
+def _quality_report(document: dict | None, warnings: list[str]) -> tuple[dict, dict]:
+    if not document:
+        return {}, {}
+    raw_quality = document.get("quality") if isinstance(document.get("quality"), dict) else {}
+    raw_provenance = document.get("provenance") if isinstance(document.get("provenance"), dict) else {}
+    inspection = raw_provenance.get("inspection") if isinstance(raw_provenance.get("inspection"), dict) else {}
+    attempts = raw_provenance.get("attempts") if isinstance(raw_provenance.get("attempts"), list) else []
+    providers = [str(item.get("provider")) for item in attempts if isinstance(item, dict) and item.get("provider")]
+    provider_attempts = [{"provider": str(item.get("provider")), "status": item.get("status"),
+                          "error_code": (item.get("error") or {}).get("code") if isinstance(item.get("error"), dict) else None}
+                         for item in attempts if isinstance(item, dict) and item.get("provider")]
+    parser = document.get("parser") if isinstance(document.get("parser"), dict) else {}
+    if parser.get("name") and parser["name"] not in providers:
+        providers.append(str(parser["name"]))
+    quality = dict(raw_quality) | {"input_classification": inspection.get("pdf_type", document.get("document_type", "unknown")),
+                                  "pages": len(document.get("pages") or []), "tables": len(document.get("tables") or []),
+                                  "images": len(document.get("images") or []), "warnings": len(warnings),
+                                  "ocr_pages": len(inspection.get("pages_needing_ocr") or []),
+                                  "ocr_recommended": bool(inspection.get("ocr_recommended", False)),
+                                  "truncation_reason": raw_quality.get("truncation_reason"),
+                                  "truncated": bool(raw_quality.get("truncated", False)),
+                                  "confidence": raw_quality.get("confidence"),
+                                  "classification_confidence": inspection.get("confidence")}
+    provenance = {"provider_chain": providers, "provider_attempts": provider_attempts, "inspection": inspection,
+                  "fallback_used": any(item.get("status") == "failed" for item in provider_attempts), "parser": parser}
+    return quality, provenance
+
+
+def _parse_strategy(goal: str | None) -> str:
+    normalized = (goal or "").lower().replace("-", "_").replace(" ", "_")
+    compact = normalized.replace("_", "")
+    if "ocr_first" in normalized or "ocr优先" in compact:
+        return "ocr_first"
+    if "table_first" in normalized or "表格优先" in compact:
+        return "table_first"
+    if "text_first" in normalized or "文本优先" in compact:
+        return "text_first"
+    return "auto"
 
 
 async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
@@ -72,7 +116,8 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     current = await task_repository.get(record.task_id)
     if current:
         await task_repository.update(current.task_id, current.revision, set_plan)
-    context = ParseContext(file=FileInput(file_id=record.file_id, path=str(source_path), filename=stored.filename, mime_type=stored.content_type))
+    context = ParseContext(file=FileInput(file_id=record.file_id, path=str(source_path), filename=stored.filename, mime_type=stored.content_type),
+                           options=ParseOptions(strategy=_parse_strategy(record.goal)))
     workspace = artifact_repository.workspace(record.task_id)
     context.metadata["artifact_dir"] = str(workspace)
     context.metadata["output_dir"] = str(workspace)
@@ -87,6 +132,14 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     current = await task_repository.get(record.task_id)
     if current:
         await task_repository.update(current.task_id, current.revision, lambda item: setattr(item, "plan", plan.model_dump(mode="json")))
+    warnings = list(dict.fromkeys([*(result.get("warnings") or []), *((document or {}).get("warnings") or [])]))
+    if document:
+        try:
+            generate_document_exports(document, workspace, max_bytes=settings.task_max_result_size_mb * 1024 * 1024)
+        except ExportLimitExceeded:
+            warnings.append("结果导出超过大小限制，已跳过导出文件")
+        except Exception:
+            warnings.append("结果导出生成失败，原始解析结果仍然可用")
     artifacts = artifact_repository.collect(record.task_id)
     for artifact in artifacts:
         await task_manager.events.append(record.task_id, "artifact.created", message="解析产物已生成",
@@ -94,9 +147,11 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
                                                   "size_bytes": artifact.size_bytes})
     public_artifacts = [item.model_dump(mode="json") | {"download_url": f"/api/v1/tasks/{record.task_id}/artifacts/{item.artifact_id}"} for item in artifacts]
     status = "succeeded" if result["status"] == "success" else "partial" if result["status"] == "partial" else "failed"
+    quality, provenance = _quality_report(document, warnings)
     return TaskResultEnvelope(status=status, file_id=record.file_id, document=document, artifacts=public_artifacts,
-                              steps=[step.model_dump(mode="json")], warnings=list(result.get("warnings") or []),
-                              metrics={}, error=result.get("error"))
+                              steps=[step.model_dump(mode="json")], warnings=warnings,
+                              metrics=dict(result.get("metrics") or {}), quality=quality, provenance=provenance,
+                              error=result.get("error"))
 
 
 task_manager = PersistentTaskManager(run_parse_intent, task_repository, max_concurrent_executions=settings.task_max_concurrent_executions,

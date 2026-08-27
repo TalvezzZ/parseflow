@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.main import app
+from app.main import _parse_strategy, _public_document, app
 from app.tasks.events import FileTaskEventRepository
 from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
 from app.tasks.models import TaskRecord, TaskResultEnvelope
@@ -44,7 +44,28 @@ async def test_upload_only_task_api_returns_path_free_normalized_result() -> Non
     assert task["data_id"] == "customer-001"
     assert task["result"]["document"]["document_type"] == "json"
     assert task["result"]["file_id"] == submitted["file_id"]
-    assert "path" not in json.dumps(task)
+    assert task["result"]["quality"]["input_classification"] == "json"
+    assert task["result"]["provenance"]["provider_chain"]
+    export = next(item for item in task["result"]["artifacts"] if item["filename"] == "document.json")
+    downloaded = await request("GET", export["download_url"])
+    assert downloaded.status_code == 200
+    assert json.loads(downloaded.text)["document_type"] == "json"
+    assert "path" not in json.dumps(task) and '"path"' not in downloaded.text
+
+
+def test_parse_strategy_accepts_only_bounded_goal_hints() -> None:
+    assert _parse_strategy("请 OCR 优先处理") == "ocr_first"
+    assert _parse_strategy("table-first") == "table_first"
+    assert _parse_strategy("任意 provider=/tmp/private") == "auto"
+
+
+def test_public_document_recursively_removes_server_paths() -> None:
+    document = _public_document({"source_file": {"path": "/private/input", "file_id": "file_1"},
+                                 "images": [{"path": "/private/image", "relative_path": "images/a.png"}],
+                                 "metadata": {"nested": {"output_dir": "/private/out", "title": "safe"}}})
+    serialized = json.dumps(document)
+    assert "/private/" not in serialized
+    assert document["images"][0]["relative_path"] == "images/a.png"
 
 
 @pytest.mark.asyncio

@@ -60,6 +60,19 @@ async def test_text_pdf_uses_normal_provider() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ocr_first_uses_available_ocr_for_text_pdf() -> None:
+    normal = FakeProvider("normal.test", "normal")
+    ocr = FakeProvider("ocr.test", "ocr")
+    skill = PdfParseSkill(inspector=FakeInspector("text_based"), providers=ProviderRegistry([normal, ocr]),
+                          normal_provider="normal.test", ocr_provider="ocr.test")
+    context = make_context()
+    context.options.strategy = "ocr_first"
+    result = await skill.execute(context)
+    assert result.status == "success" and ocr.called == 1 and normal.called == 0
+    assert result.data["document"]["provenance"]["strategy"] == "ocr_first"
+
+
+@pytest.mark.asyncio
 async def test_scanned_pdf_uses_ocr_provider() -> None:
     normal = FakeProvider("normal.test", "normal")
     ocr = FakeProvider("ocr.test", "ocr")

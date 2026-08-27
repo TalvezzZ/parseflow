@@ -82,6 +82,8 @@ class PaddleOcrPdfProvider(Provider):
         plain_text = "\n\n".join(page.text for page in document_pages if page.text)
         if not plain_text.strip():
             return self._failed("quality_insufficient", "PaddleOCR 未提取到可用文本")
+        blank_pages = [page.page_number for page in document_pages if not page.text.strip()]
+        warnings = [f"OCR 未在第 {page} 页识别到文本，可能为空白页或清晰度不足" for page in blank_pages]
         document = DocumentResult(
             document_id=context.file.file_id,
             source_file=context.file,
@@ -90,10 +92,13 @@ class PaddleOcrPdfProvider(Provider):
             blocks=blocks,
             representations={"plain_text": plain_text, "markdown": "\n\n---\n\n".join(markdown_parts)},
             parser={"name": self.manifest.name, "version": self.manifest.version},
-            quality={"pages": len(document_pages), "text_chars": len(plain_text), "blocks": len(blocks)},
-            provenance={"ocr": {"engine": "PaddleOCR", "device": self.device, "lang": self.lang, "render_scale": self.render_scale}},
+            warnings=warnings,
+            quality={"pages": len(document_pages), "text_chars": len(plain_text), "blocks": len(blocks), "blank_pages": len(blank_pages)},
+            provenance={"ocr": {"engine": "PaddleOCR", "device": self.device, "lang": self.lang, "render_scale": self.render_scale,
+                                    "orientation_correction": False}},
         )
-        return ProviderResult(status="success", provider_name=self.manifest.name, document=document, metrics=document.quality)
+        return ProviderResult(status="partial" if warnings else "success", provider_name=self.manifest.name, document=document,
+                              warnings=warnings, metrics=document.quality)
 
     def _create_ocr(self) -> Any:
         if self._ocr_factory is not None:

@@ -1,4 +1,4 @@
-# ParseFlow v1.1.0 功能说明
+# ParseFlow v1.2.0 功能说明
 
 ParseFlow 是一个面向单机或可信内网环境的异步文档解析平台。用户上传文件后，服务端选择合适的解析能力，任务在后台持久化执行，并通过统一的任务、结果和 artifact 接口提供进度与下载。
 
@@ -82,7 +82,18 @@ Remote MCP 使用 opaque ID，不接受服务器路径。稳定工具包括：
 - `/metrics` 输出低基数 Prometheus 兼容 HTTP 指标；
 - Docker Compose 默认仅绑定 loopback，并启用只读根文件系统、能力收缩与 CPU/内存/PID 限制。
 
-## 8. 稳定契约
+## 8. 质量报告与结果导出
+
+v1.2.0 在任务结果中增加可选的 `quality` 与 `provenance`：输入分类、页/表格/图片数量、截断状态、可靠来源置信度、Provider/fallback 链路和解析器信息。未知置信度保持 `null`，不会根据启发式结果伪造模型置信度。
+
+成功解析的文档自动生成受任务结果大小预算控制的导出产物：
+
+- 文档：JSON、Markdown、纯文本；
+- 表格：CSV、JSON、Markdown，以及包含全部表格的多工作表 XLSX；
+- 所有文件使用 opaque artifact ID 下载，内部相对存储键不会出现在公开响应中；
+- Web 工作台展示输入分类、Provider 链路、截断状态和区分后的结果导出入口。
+
+## 9. 稳定契约
 
 v1.0.0 冻结 `/api/v1`、Remote MCP 工具、opaque ID 前缀和稳定任务状态。v1.x 可增加可选字段或能力，但不会移除/重命名公开 endpoint、稳定工具、必填响应字段、稳定状态、错误码或 ID 语义。
 

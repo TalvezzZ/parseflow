@@ -44,3 +44,9 @@ provider chain、input classification、coverage、truncation、warnings、confi
 - 导出格式正确、无路径泄露、artifact 可下载。
 - UI 显示 provider、warning、质量和导出入口。
 - 不改变 v1 既有字段语义；新增字段均为可选。
+
+## 实施说明
+
+v1.2.0 采用任务完成时的受控同步导出：每个导出文件受 `TASK_MAX_RESULT_SIZE_MB` 限制，超限会产生 warning，不阻塞原始解析结果。公开任务结果新增可选 `quality`/`provenance` 字段；artifact manifest 使用仅服务端可见的相对 `storage_key` 支持嵌套导出下载，公开响应仍只包含 opaque ID、文件名和下载 URL。
+
+媒体转写仍未启用；本版本仅在 `app/skills/media/asr.py` 固化 Provider、语言、时间轴、置信度和时长预算契约。

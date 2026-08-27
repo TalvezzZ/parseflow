@@ -26,15 +26,18 @@ class ArtifactRepository:
     def collect(self, task_id: str) -> list[ArtifactRecord]:
         workspace = self.workspace(task_id)
         artifacts: list[ArtifactRecord] = []
+        manifest_items: list[dict] = []
         for path in sorted(workspace.rglob("*")):
             if not path.is_file() or path.is_symlink():
                 continue
-            artifacts.append(ArtifactRecord(
+            item = ArtifactRecord(
                 artifact_id=new_id("artifact"), filename=path.name,
                 content_type=mimetypes.guess_type(path.name)[0], size_bytes=path.stat().st_size,
-                kind="generated_file",
-            ))
-        atomic_write_json(self._manifest_path(task_id), {"task_id": task_id, "artifacts": [item.model_dump(mode="json") for item in artifacts]})
+                kind="export" if path.parent.name == "exports" else "generated_file",
+            )
+            artifacts.append(item)
+            manifest_items.append(item.model_dump(mode="json") | {"storage_key": path.relative_to(workspace).as_posix()})
+        atomic_write_json(self._manifest_path(task_id), {"task_id": task_id, "artifacts": manifest_items})
         return artifacts
 
     def list(self, task_id: str) -> list[ArtifactRecord]:
@@ -49,11 +52,16 @@ class ArtifactRepository:
 
     def download_path(self, task_id: str, artifact_id: str) -> Path | None:
         require_id("artifact", artifact_id)
-        artifacts = self.list(task_id)
-        item = next((item for item in artifacts if item.artifact_id == artifact_id), None)
+        manifest = self._manifest_path(task_id)
+        try:
+            import json
+            raw = json.loads(manifest.read_text(encoding="utf-8")).get("artifacts", [])
+            item = next((item for item in raw if item.get("artifact_id") == artifact_id), None)
+        except Exception:
+            return None
         if item is None:
             return None
-        candidate = (self.workspace(task_id) / item.filename).resolve()
+        candidate = (self.workspace(task_id) / str(item.get("storage_key") or item.get("filename"))).resolve()
         try:
             candidate.relative_to(self.workspace(task_id).resolve())
         except ValueError:
