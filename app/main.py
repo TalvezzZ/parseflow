@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
-from shutil import disk_usage
+from shutil import disk_usage, which
 from time import perf_counter
 from uuid import uuid4
 
@@ -16,18 +17,25 @@ from app.agent.pipeline import OfficeParsePipeline
 from app.config import get_settings
 from app.documents.models import FileInput, ParseContext
 from app.files import LocalFileStore, StoredFilePublic
-from app.observability import HttpMetrics, logger
+from app.observability import HttpMetrics, JsonFormatter, logger
 from app.planning.models import now
 from app.planning.rule_planner import RuleBasedPlanner
 from app.skills.office.adapters.libreoffice import LibreOfficeProvider
 from app.skills.registry import create_default_registry
 from app.tasks.artifacts import ArtifactRepository
+from app.tasks.events import TaskEventList
 from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
 from app.tasks.models import ArtifactListResponse, TaskListResponse, TaskRecord, TaskResultEnvelope, TaskSubmitResponse
 from app.tasks.repository import FileTaskRepository
 from app.version import __version__
 
 settings = get_settings()
+if settings.log_format == "json":
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonFormatter())
+    logger.handlers = [handler]
+    logger.propagate = False
+logger.setLevel(settings.log_level.upper())
 data_root = Path(settings.data_dir).resolve()
 file_store = LocalFileStore(str(data_root / "files"), settings.file_max_size_mb, settings.file_allowed_suffixes,
                             min_free_mb=settings.storage_min_free_mb)
@@ -80,6 +88,10 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     if current:
         await task_repository.update(current.task_id, current.revision, lambda item: setattr(item, "plan", plan.model_dump(mode="json")))
     artifacts = artifact_repository.collect(record.task_id)
+    for artifact in artifacts:
+        await task_manager.events.append(record.task_id, "artifact.created", message="解析产物已生成",
+                                         details={"artifact_id": artifact.artifact_id, "kind": artifact.kind,
+                                                  "size_bytes": artifact.size_bytes})
     public_artifacts = [item.model_dump(mode="json") | {"download_url": f"/api/v1/tasks/{record.task_id}/artifacts/{item.artifact_id}"} for item in artifacts]
     status = "succeeded" if result["status"] == "success" else "partial" if result["status"] == "partial" else "failed"
     return TaskResultEnvelope(status=status, file_id=record.file_id, document=document, artifacts=public_artifacts,
@@ -122,8 +134,10 @@ async def observe_and_authenticate(request: Request, call_next):
         response = await call_next(request)
     duration_ms = int((perf_counter() - started) * 1000)
     response.headers["X-Request-ID"] = request_id
-    http_metrics.record(response.status_code, duration_ms)
-    logger.info("http_request method=%s path=%s status=%s duration_ms=%s request_id=%s", request.method, request.url.path, response.status_code, duration_ms, request_id)
+    route = getattr(request.scope.get("route"), "path", "unknown")
+    http_metrics.record(response.status_code, duration_ms, method=request.method, route=route)
+    logger.info("http_request", extra={"request_id": request_id, "method": request.method, "route": route,
+                                       "status": response.status_code, "duration_ms": duration_ms})
     return response
 
 
@@ -137,20 +151,32 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/ready", tags=["系统"])
-async def ready() -> dict[str, str]:
-    """Check local persistence and worker availability without probing parsers."""
+async def ready() -> dict[str, object]:
+    """Check repositories, writable storage, registry and workers without running parsers or downloading models."""
     try:
         data_root.mkdir(parents=True, exist_ok=True)
-        probe = data_root / ".ready-probe"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink(missing_ok=True)
-        if disk_usage(data_root).free < settings.storage_min_free_mb * 1024 * 1024:
+        await task_repository.list()
+        for directory in (data_root, artifact_repository.root):
+            directory.mkdir(parents=True, exist_ok=True)
+            probe = directory / ".ready-probe"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+        free_bytes = disk_usage(data_root).free
+        if free_bytes < settings.storage_min_free_mb * 1024 * 1024:
             raise OSError("storage capacity below safety threshold")
-        if not task_manager._started or not task_manager._workers:
+        if not task_manager._started or not any(not worker.done() for worker in task_manager._workers):
             raise OSError("task worker unavailable")
+        if not registry.list_manifests():
+            raise OSError("skill registry unavailable")
+        external = {"libreoffice": which(settings.office_converter_command) is not None,
+                    "ffmpeg": which(settings.media_ffmpeg_command) is not None,
+                    "ffprobe": which(settings.media_ffprobe_command) is not None}
+        if settings.app_env == "production" and not all(external.values()):
+            raise OSError("required external parser binary unavailable")
     except OSError as exc:
         raise HTTPException(status_code=503, detail={"code": "not_ready", "message": str(exc)}) from exc
-    return {"status": "ready", "service": settings.app_name}
+    return {"status": "ready", "service": settings.app_name, "checks": {"repository": "ok", "storage": "ok",
+            "workers": "ok", "registry": "ok", "external_tools": external}, "free_bytes": free_bytes}
 
 
 @app.post("/api/v1/files", response_model=StoredFilePublic, status_code=201, tags=["文件"])
@@ -205,6 +231,14 @@ async def get_task(task_id: str) -> TaskRecord:
     return task
 
 
+@app.get("/api/v1/tasks/{task_id}/events", response_model=TaskEventList, tags=["任务"])
+async def list_task_events(task_id: str, after: int = Query(default=0, ge=0),
+                           limit: int = Query(default=100, ge=1, le=500)) -> TaskEventList:
+    if await task_manager.get(task_id) is None:
+        raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": "未找到任务"})
+    return await task_manager.events.list(task_id, after=after, limit=limit)
+
+
 @app.post("/api/v1/tasks/{task_id}/cancel", response_model=TaskRecord, tags=["任务"])
 async def cancel_task(task_id: str) -> TaskRecord:
     task = await task_manager.cancel(task_id)
@@ -256,7 +290,12 @@ async def metrics() -> dict:
 
 @app.get("/metrics", include_in_schema=False)
 async def prometheus_metrics() -> Response:
-    return Response(http_metrics.prometheus(), media_type="text/plain; version=0.0.4; charset=utf-8")
+    records = await task_repository.list()
+    counts = {status: sum(record.status == status for record in records) for status in
+              ("queued", "planning", "running", "cancelling", "succeeded", "partial", "failed", "cancelled", "interrupted")}
+    storage_bytes = sum(path.stat().st_size for path in data_root.rglob("*") if path.is_file() and not path.is_symlink())
+    body = http_metrics.prometheus(task_counts=counts, queue_depth=counts["queued"], storage_bytes=storage_bytes)
+    return Response(body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.get("/api/v1/skills", tags=["Skill"])

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     app_name: str = "parse-agent"
     app_env: str = "dev"
     log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
     openai_api_key: str | None = None
     openai_base_url: str | None = None
     openai_model: str | None = None

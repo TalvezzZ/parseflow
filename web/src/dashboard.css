@@ -33,7 +33,10 @@ body { min-width: 320px; background: radial-gradient(circle at 12% 0%, #e7f5fa 0
 .primary:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 12px 24px rgba(15, 112, 145, .27); }
 .hint { margin: 24px -24px -22px; padding: 18px 24px; border-top: 1px solid #e6eef2; background: #f8fbfc; }
 .content-panel { min-height: 660px; padding: 28px 32px; }
-.task-detail-toolbar { margin: -7px 0 15px; }
+.task-detail-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -7px 0 15px; }
+.task-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.task-actions button { min-height: 34px; padding: 6px 11px; color: #245f76; cursor: pointer; border: 1px solid #cfe1e8; border-radius: 9px; background: #f7fbfc; }
+.task-actions button:hover { border-color: #8ec3d3; background: #eaf7fa; }
 .back-to-list { display: inline-flex; align-items: center; min-height: 34px; padding: 6px 10px; color: #2b718a; font: 600 12px inherit; cursor: pointer; border: 1px solid #d8e8ee; border-radius: 9px; background: #f6fbfc; transition: color .18s, border-color .18s, background .18s; }
 .back-to-list:hover { color: #075f7d; border-color: #a8d2df; background: #eaf7fa; }
 .back-to-list:focus-visible { outline: 3px solid #70c9e2; outline-offset: 3px; }

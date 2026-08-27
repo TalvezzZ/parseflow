@@ -46,3 +46,13 @@ jobs:
 
       - name: Build application
         run: npm run build
+
+  docker-runtime:
+    name: Docker runtime smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build and smoke hardened container
+        run: ./scripts/docker-runtime-smoke.sh

@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from app.main import app
+from app.tasks.events import FileTaskEventRepository
 from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
 from app.tasks.models import TaskRecord, TaskResultEnvelope
 from app.tasks.repository import FileTaskRepository, TaskRevisionConflictError
@@ -129,6 +130,32 @@ async def test_terminal_task_can_retry_and_delete_via_public_api() -> None:
     deleted = await request("DELETE", f"/api/v1/tasks/{task_id}")
     assert deleted.status_code == 204
     assert (await request("GET", f"/api/v1/tasks/{task_id}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_event_repository_recursively_removes_private_fields(tmp_path: Path) -> None:
+    repository = FileTaskEventRepository(tmp_path / "events")
+    task_id = "task_" + "a" * 32
+    await repository.append(task_id, "warning", details={"provider": "safe", "nested": {"path": "/secret", "value": 1}})
+    event = (await repository.list(task_id)).items[0]
+    assert event.details == {"provider": "safe", "nested": {"value": 1}}
+
+
+@pytest.mark.asyncio
+async def test_task_events_are_persistent_ordered_and_path_free() -> None:
+    created = await request("POST", "/api/v1/tasks/parse", files={"file": ("events.json", b"{}", "application/json")})
+    task_id = created.json()["task_id"]
+    await wait_for_terminal(task_id)
+    response = await request("GET", f"/api/v1/tasks/{task_id}/events?limit=2")
+    assert response.status_code == 200
+    first = response.json()
+    assert [item["type"] for item in first["items"]] == ["created", "queued"]
+    assert first["next_after"] == 2
+    rest = (await request("GET", f"/api/v1/tasks/{task_id}/events?after=2")).json()["items"]
+    assert [item["sequence"] for item in rest] == list(range(3, len(rest) + 3))
+    assert rest[-1]["type"] == "succeeded"
+    serialized = json.dumps(first | {"rest": rest})
+    assert '"path"' not in serialized and '"output_dir"' not in serialized
 
 
 def test_openapi_has_no_path_callback_or_output_directory_public_inputs() -> None:

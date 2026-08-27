@@ -99,6 +99,11 @@ docker compose up -d --build
 # Verify both services and open the workbench.
 docker compose ps
 curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/ready
+curl http://127.0.0.1:8080/metrics
+
+# Full Linux runtime policy and upload/task smoke (requires Docker daemon).
+./scripts/docker-runtime-smoke.sh
 ```
 
 Open `http://127.0.0.1:8080`. Change the published port with `PARSEFLOW_PORT`, for example `PARSEFLOW_PORT=9000 docker compose up -d`.

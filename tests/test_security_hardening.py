@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app.main import app
+from app.observability import HttpMetrics, JsonFormatter
 from app.security.archive import validate_zip_archive
 from app.security.budgets import ParseBudget, ResourceBudgetExceeded, validate_output_size
 from app.storage.janitor import StorageJanitor
@@ -63,6 +64,26 @@ async def test_storage_janitor_keeps_active_tasks_and_removes_expired_temp(tmp_p
     assert await repository.get(active.task_id) is not None
     assert not stale.exists()
     assert report.removed_temp_files == 1
+
+
+def test_prometheus_metrics_use_route_templates_and_no_identifier_labels() -> None:
+    metrics = HttpMetrics()
+    metrics.record(200, 25, method="GET", route="/api/v1/tasks/{task_id}")
+    body = metrics.prometheus(task_counts={"running": 1}, queue_depth=0, storage_bytes=12)
+    assert 'route="/api/v1/tasks/{task_id}"' in body
+    assert "task_" + "a" * 32 not in body and "file_" + "b" * 32 not in body
+    assert "parseflow_tasks_current" in body and "parseflow_storage_bytes 12" in body
+
+
+def test_json_formatter_emits_explicit_fields_without_arbitrary_secrets() -> None:
+    import logging
+    record = logging.LogRecord("test", logging.INFO, __file__, 1, "request completed", (), None)
+    record.request_id = "req_safe"
+    record.status = 200
+    record.api_key = "must-not-serialize"
+    payload = json.loads(JsonFormatter().format(record))
+    assert payload["request_id"] == "req_safe" and payload["service_version"]
+    assert "api_key" not in payload
 
 
 def test_public_contracts_do_not_expose_internal_security_paths() -> None:

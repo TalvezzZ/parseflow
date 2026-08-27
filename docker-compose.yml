@@ -5,7 +5,7 @@ services:
     build:
       context: .
       target: full
-    image: parseflow:1.0.0
+    image: parseflow:1.1.0
     restart: unless-stopped
     read_only: true
     cap_drop:
@@ -28,7 +28,7 @@ services:
       # Comma-separated public Host headers accepted by MCP transport security.
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-localhost,127.0.0.1,localhost:*,127.0.0.1:*}
     ports:
-      - "${PARSEFLOW_BIND_HOST:-127.0.0.1}:${PARSEFLOW_PORT:-8080}:80"
+      - "${PARSEFLOW_BIND_HOST:-127.0.0.1}:${PARSEFLOW_PORT:-8080}:8080"
     volumes:
       - parseflow-data:/data
       - parseflow-models:/home/parseflow/.paddlex
@@ -37,7 +37,7 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1/ready', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=3)"]
       interval: 30s
       timeout: 5s
       start_period: 45s
@@ -45,6 +45,6 @@ services:
 
 volumes:
   parseflow-data:
-    name: parseflow-data
+    name: ${PARSEFLOW_DATA_VOLUME:-parseflow-data}
   parseflow-models:
-    name: parseflow-models
+    name: ${PARSEFLOW_MODELS_VOLUME:-parseflow-models}

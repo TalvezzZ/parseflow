@@ -7,6 +7,7 @@ from datetime import timedelta
 
 from app.documents.models import ProviderError
 from app.storage.ids import new_id
+from app.tasks.events import FileTaskEventRepository
 from app.tasks.models import TERMINAL_STATUSES, TaskMetrics, TaskRecord, TaskResultEnvelope, TaskSubmitResponse, utc_now
 from app.tasks.repository import FileTaskRepository, TaskRevisionConflictError
 
@@ -26,9 +27,11 @@ class PersistentTaskManager:
 
     def __init__(self, runner: TaskRunner, repository: FileTaskRepository, *, max_concurrent_executions: int = 2,
                  max_queue_size: int = 100, default_timeout_seconds: int = 1800,
-                 result_ttl_seconds: int = 86400, cleanup_interval_seconds: int = 300) -> None:
+                 result_ttl_seconds: int = 86400, cleanup_interval_seconds: int = 300,
+                 event_repository: FileTaskEventRepository | None = None) -> None:
         self.runner = runner
         self.repository = repository
+        self.events = event_repository or FileTaskEventRepository(repository.root.parent / "events")
         self.max_concurrent_executions = max_concurrent_executions
         self.max_queue_size = max_queue_size
         self.default_timeout_seconds = default_timeout_seconds
@@ -58,6 +61,10 @@ class PersistentTaskManager:
         for record in recovered:
             if record.status == "queued":
                 self._queue.put_nowait(record.task_id)
+            elif record.status == "interrupted":
+                timeline = await self.events.list(record.task_id)
+                if not timeline.items or timeline.items[-1].type != "interrupted":
+                    await self.events.append(record.task_id, "interrupted", message="服务重启中断了任务")
         self._workers = [asyncio.create_task(self._worker(index), name=f"parseflow-task-worker-{index}")
                          for index in range(self.max_concurrent_executions)]
         self._cleanup_worker = asyncio.create_task(self._cleanup_loop(), name="parseflow-task-cleanup")
@@ -83,6 +90,8 @@ class PersistentTaskManager:
             raise TaskQueueFullError(self._queue.qsize(), self.max_queue_size)
         record = TaskRecord(task_id=new_id("task"), file_id=file_id, goal=goal, data_id=data_id)
         await self.repository.create(record)
+        await self.events.append(record.task_id, "created", message="任务已创建")
+        await self.events.append(record.task_id, "queued", message="任务已进入队列")
         self._queue.put_nowait(record.task_id)
         return TaskSubmitResponse(
             task_id=record.task_id, file_id=file_id, status="queued", queue_position=self._queue.qsize(),
@@ -125,6 +134,7 @@ class PersistentTaskManager:
         if record.status not in TERMINAL_STATUSES:
             raise ValueError("active_task_cannot_delete")
         await self.repository.delete(task_id)
+        await self.events.delete(task_id)
         return True
 
     async def cancel(self, task_id: str) -> TaskRecord | None:
@@ -132,9 +142,13 @@ class PersistentTaskManager:
         if record is None:
             return None
         if record.status == "queued":
-            return await self.repository.update(task_id, record.revision, self._cancel_now)
+            updated = await self.repository.update(task_id, record.revision, self._cancel_now)
+            await self.events.append(task_id, "cancelled", message="任务已取消")
+            return updated
         if record.status in {"planning", "running"}:
-            return await self.repository.update(task_id, record.revision, self._request_cancel)
+            updated = await self.repository.update(task_id, record.revision, self._request_cancel)
+            await self.events.append(task_id, "cancel.requested", message="已请求取消任务")
+            return updated
         return record
 
     @staticmethod
@@ -174,7 +188,12 @@ class PersistentTaskManager:
             current.status = status  # type: ignore[assignment]
             if status == "planning":
                 current.started_at = utc_now()
-        return await self.repository.update(record.task_id, record.revision, mutate)
+        updated = await self.repository.update(record.task_id, record.revision, mutate)
+        if status == "planning":
+            await self.events.append(record.task_id, "planning.started", message="开始规划解析任务")
+        elif status == "running":
+            await self.events.append(record.task_id, "step.started", message="开始执行解析", step="parse")
+        return updated
 
     async def _execute(self, record: TaskRecord) -> None:
         try:
@@ -198,7 +217,12 @@ class PersistentTaskManager:
                 value.status = envelope.status
                 value.finished_at = utc_now()
                 value.duration_ms = int((time.perf_counter() - started) * 1000)
-            await self.repository.update(current.task_id, current.revision, complete)
+            completed = await self.repository.update(current.task_id, current.revision, complete)
+            await self.events.append(completed.task_id, "step.finished", message="解析执行结束", step="parse",
+                                     details={"status": completed.status})
+            for warning in completed.warnings:
+                await self.events.append(completed.task_id, "warning", message=warning)
+            await self.events.append(completed.task_id, completed.status, message="任务已结束")
         except TimeoutError:
             await self._fail(record.task_id, "task_timeout", f"任务超过 {self.default_timeout_seconds} 秒")
         except Exception as exc:
@@ -214,6 +238,7 @@ class PersistentTaskManager:
             record.finished_at = utc_now()
             record.duration_ms = int((record.finished_at - (record.started_at or record.created_at)).total_seconds() * 1000)
         await self.repository.update(current.task_id, current.revision, fail)
+        await self.events.append(task_id, "failed", message=message, details={"error_code": code})
 
     async def _cleanup_loop(self) -> None:
         while True:
@@ -222,6 +247,7 @@ class PersistentTaskManager:
             for record in await self.repository.list():
                 if record.status in TERMINAL_STATUSES and record.finished_at and record.finished_at < cutoff:
                     await self.repository.delete(record.task_id)
+                    await self.events.delete(record.task_id)
 
 
 # v0.8.0 intentionally removes the in-memory/callback implementation.
