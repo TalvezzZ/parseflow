@@ -117,6 +117,40 @@
         "title": "Body_upload_file_api_v1_files_post",
         "type": "object"
       },
+      "CapabilitiesResponse": {
+        "properties": {
+          "allowed_suffixes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Suffixes",
+            "type": "array"
+          },
+          "max_result_bytes": {
+            "title": "Max Result Bytes",
+            "type": "integer"
+          },
+          "max_upload_bytes": {
+            "title": "Max Upload Bytes",
+            "type": "integer"
+          },
+          "task_filters": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Task Filters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "allowed_suffixes",
+          "max_upload_bytes",
+          "max_result_bytes",
+          "task_filters"
+        ],
+        "title": "CapabilitiesResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -293,6 +327,18 @@
             "title": "Cancel Requested",
             "type": "boolean"
           },
+          "content_type": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -336,6 +382,18 @@
           "file_id": {
             "title": "File Id",
             "type": "string"
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filename"
           },
           "finished_at": {
             "anyOf": [
@@ -648,10 +706,31 @@
   "info": {
     "description": "基于 LangChain 和 Skill 的文档解析 Agent",
     "title": "Parse Agent",
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "capabilities_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capabilities",
+        "tags": [
+          "系统"
+        ]
+      }
+    },
     "/api/v1/files": {
       "post": {
         "operationId": "upload_file_api_v1_files_post",
@@ -835,6 +914,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "pattern": "^(queued|planning|running|cancelling|succeeded|partial|failed|cancelled|interrupted)$",
                   "type": "string"
                 },
                 {
@@ -851,6 +931,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maxLength": 256,
                   "type": "string"
                 },
                 {
@@ -867,6 +948,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maxLength": 64,
                   "type": "string"
                 },
                 {
@@ -882,6 +964,7 @@
             "required": false,
             "schema": {
               "default": "created_desc",
+              "pattern": "^(created_desc|created_asc)$",
               "title": "Sort",
               "type": "string"
             }
@@ -896,6 +979,91 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "File Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "created_after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "created_before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created Before"
             }
           }
         ],

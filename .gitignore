@@ -23,4 +23,7 @@ web/dist/
 *.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
+web/test-results/
+web/playwright-report/
+*.egg-info/
 

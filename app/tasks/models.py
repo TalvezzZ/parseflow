@@ -40,6 +40,8 @@ class TaskRecord(BaseModel):
     task_id: str
     task_type: Literal["parse.intent"] = "parse.intent"
     file_id: str
+    filename: str | None = Field(default=None, max_length=255)
+    content_type: str | None = Field(default=None, max_length=255)
     status: TaskStatus = "queued"
     goal: str | None = None
     data_id: str | None = Field(default=None, max_length=128)
@@ -68,6 +70,13 @@ class TaskSubmitResponse(BaseModel):
 class TaskListResponse(BaseModel):
     items: list[TaskRecord]
     next_cursor: str | None = None
+
+
+class CapabilitiesResponse(BaseModel):
+    allowed_suffixes: list[str]
+    max_upload_bytes: int
+    max_result_bytes: int
+    task_filters: list[str]
 
 
 class TaskMetrics(BaseModel):

@@ -53,7 +53,8 @@ WORKDIR /app
 # layer over the large OCR environment, which duplicates several GB.
 COPY --chown=parseflow:parseflow pyproject.toml uv.lock ./
 USER parseflow
-RUN uv sync --frozen --no-dev --group ocr --no-install-project
+RUN --mount=type=cache,target=/home/parseflow/.cache/uv,uid=999,gid=999,sharing=locked \
+    uv sync --frozen --no-dev --group ocr --no-install-project
 
 COPY --chown=parseflow:parseflow app ./app
 COPY --chown=parseflow:parseflow README.md ./README.md

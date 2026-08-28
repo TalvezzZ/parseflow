@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.documents.models import ProviderError
 from app.storage.ids import new_id
@@ -82,13 +82,15 @@ class PersistentTaskManager:
         self._cleanup_worker = None
         self._started = False
 
-    async def submit_parse(self, file_id: str, goal: str | None, data_id: str | None) -> TaskSubmitResponse:
+    async def submit_parse(self, file_id: str, goal: str | None, data_id: str | None,
+                           filename: str | None = None, content_type: str | None = None) -> TaskSubmitResponse:
         await self.start()
         if not self._accepting:
             raise RuntimeError("任务服务正在关闭")
         if self._queue.qsize() >= self.max_queue_size:
             raise TaskQueueFullError(self._queue.qsize(), self.max_queue_size)
-        record = TaskRecord(task_id=new_id("task"), file_id=file_id, goal=goal, data_id=data_id)
+        record = TaskRecord(task_id=new_id("task"), file_id=file_id, filename=filename, content_type=content_type,
+                            goal=goal, data_id=data_id)
         await self.repository.create(record)
         await self.events.append(record.task_id, "created", message="任务已创建")
         await self.events.append(record.task_id, "queued", message="任务已进入队列")
@@ -103,25 +105,70 @@ class PersistentTaskManager:
         return await self.repository.get(task_id)
 
     async def list(self, status: str | None = None, query: str | None = None, limit: int = 50, cursor: str | None = None,
-                   sort: str = "created_desc") -> tuple[list[TaskRecord], str | None]:
+                   sort: str = "created_desc", file_type: str | None = None, provider: str | None = None,
+                   error_code: str | None = None, created_after: datetime | None = None,
+                   created_before: datetime | None = None) -> tuple[list[TaskRecord], str | None]:
         records = await self.repository.list()
         if status:
             records = [record for record in records if record.status == status]
+        if file_type:
+            suffix = file_type.casefold().lstrip(".")
+            records = [record for record in records if self._file_type(record) == suffix]
+        if provider:
+            needle = provider.casefold()
+            records = [record for record in records if any(needle in item.casefold() for item in self._providers(record))]
+        if error_code:
+            records = [record for record in records if self._error_code(record) == error_code]
+        if created_after:
+            lower = created_after.replace(tzinfo=timezone.utc) if created_after.tzinfo is None else created_after
+            records = [record for record in records if record.created_at >= lower]
+        if created_before:
+            upper = created_before.replace(tzinfo=timezone.utc) if created_before.tzinfo is None else created_before
+            records = [record for record in records if record.created_at <= upper]
         if query:
             needle = query.casefold()
-            records = [record for record in records if needle in record.task_id.casefold() or needle in record.file_id.casefold() or needle in (record.data_id or "").casefold()]
+            records = [record for record in records if needle in record.task_id.casefold() or needle in record.file_id.casefold() or needle in (record.data_id or "").casefold()
+                       or needle in self._filename(record).casefold()]
         records.sort(key=lambda item: (item.created_at, item.task_id), reverse=sort != "created_asc")
         if cursor:
             position = next((index for index, record in enumerate(records) if record.task_id == cursor), None)
-            records = records[position + 1:] if position is not None else records
+            # A cursor must refer to an item in this exact filtered sequence; never fall back to page one.
+            records = records[position + 1:] if position is not None else []
         items = records[:limit]
         return items, items[-1].task_id if len(records) > len(items) else None
+
+    @staticmethod
+    def _document(record: TaskRecord) -> dict:
+        return record.result.document if record.result and isinstance(record.result.document, dict) else {}
+
+    @classmethod
+    def _filename(cls, record: TaskRecord) -> str:
+        if record.filename:
+            return record.filename
+        source = cls._document(record).get("source_file")
+        return str(source.get("filename") or "") if isinstance(source, dict) else ""
+
+    @classmethod
+    def _file_type(cls, record: TaskRecord) -> str:
+        filename = cls._filename(record)
+        return filename.rsplit(".", 1)[-1].casefold() if "." in filename else str(cls._document(record).get("document_type") or "").casefold()
+
+    @staticmethod
+    def _providers(record: TaskRecord) -> list[str]:
+        provenance = record.result.provenance if record.result else {}
+        chain = provenance.get("provider_chain") if isinstance(provenance, dict) else []
+        return [str(item) for item in chain] if isinstance(chain, list) else []
+
+    @staticmethod
+    def _error_code(record: TaskRecord) -> str | None:
+        error = record.error or (record.result.error if record.result else None)
+        return str(error.get("code")) if isinstance(error, dict) and error.get("code") else None
 
     async def retry(self, task_id: str) -> TaskSubmitResponse | None:
         record = await self.get(task_id)
         if record is None or record.status not in TERMINAL_STATUSES:
             return None
-        submitted = await self.submit_parse(record.file_id, record.goal, record.data_id)
+        submitted = await self.submit_parse(record.file_id, record.goal, record.data_id, record.filename, record.content_type)
         created = await self.get(submitted.task_id)
         if created:
             await self.repository.update(created.task_id, created.revision, lambda item: setattr(item, "retry_of", task_id))

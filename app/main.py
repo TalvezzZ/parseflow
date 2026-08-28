@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 import logging
 from pathlib import Path
 from shutil import disk_usage, which
@@ -26,7 +27,7 @@ from app.tasks.artifacts import ArtifactRepository
 from app.tasks.events import TaskEventList
 from app.tasks.exports import ExportLimitExceeded, generate_document_exports
 from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
-from app.tasks.models import ArtifactListResponse, TaskListResponse, TaskRecord, TaskResultEnvelope, TaskSubmitResponse
+from app.tasks.models import ArtifactListResponse, CapabilitiesResponse, TaskListResponse, TaskRecord, TaskResultEnvelope, TaskSubmitResponse
 from app.tasks.repository import FileTaskRepository
 from app.version import __version__
 
@@ -259,22 +260,43 @@ async def download_file(file_id: str) -> FileResponse:
     return FileResponse(source, filename=record.filename, media_type=record.content_type)
 
 
+@app.get("/api/v1/capabilities", response_model=CapabilitiesResponse, tags=["系统"])
+async def capabilities() -> CapabilitiesResponse:
+    return CapabilitiesResponse(
+        allowed_suffixes=sorted({item.strip().lower() for item in settings.file_allowed_suffixes.split(",") if item.strip()}),
+        max_upload_bytes=settings.file_max_size_mb * 1024 * 1024,
+        max_result_bytes=settings.task_max_result_size_mb * 1024 * 1024,
+        task_filters=["status", "file_type", "created_after", "created_before", "provider", "error_code", "query"],
+    )
+
+
 @app.post("/api/v1/tasks/parse", response_model=TaskSubmitResponse, status_code=202, tags=["任务"])
 async def submit_parse_task(file: UploadFile = File(...), goal: str | None = Form(default=None), data_id: str | None = Form(default=None, max_length=128)) -> TaskSubmitResponse:
     try:
         stored = await file_store.save(file)
-        return await task_manager.submit_parse(stored.file_id, goal or None, data_id)
+        return await task_manager.submit_parse(stored.file_id, goal or None, data_id, stored.filename[:255], (stored.content_type or "")[:255] or None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "upload_rejected", "message": str(exc)}) from exc
     except TaskQueueFullError as exc:
         file_store.delete(stored.file_id)
         raise HTTPException(status_code=429, detail={"code": "task_queue_full", "message": str(exc)}) from exc
+    except Exception:
+        # The file was persisted before durable task validation/creation; never orphan it on submission failure.
+        if "stored" in locals():
+            file_store.delete(stored.file_id)
+        raise
 
 
 @app.get("/api/v1/tasks", response_model=TaskListResponse, tags=["任务"])
-async def list_tasks(status: str | None = None, query: str | None = None, cursor: str | None = None,
-                     sort: str = "created_desc", limit: int = Query(default=50, ge=1, le=100)) -> TaskListResponse:
-    items, next_cursor = await task_manager.list(status=status, query=query, cursor=cursor, sort=sort, limit=limit)
+async def list_tasks(status: str | None = Query(default=None, pattern="^(queued|planning|running|cancelling|succeeded|partial|failed|cancelled|interrupted)$"),
+                     query: str | None = Query(default=None, max_length=256), cursor: str | None = Query(default=None, max_length=64),
+                     sort: str = Query(default="created_desc", pattern="^(created_desc|created_asc)$"), limit: int = Query(default=50, ge=1, le=100),
+                     file_type: str | None = Query(default=None, max_length=32), provider: str | None = Query(default=None, max_length=128),
+                     error_code: str | None = Query(default=None, max_length=128),
+                     created_after: datetime | None = None, created_before: datetime | None = None) -> TaskListResponse:
+    items, next_cursor = await task_manager.list(status=status, query=query, cursor=cursor, sort=sort, limit=limit,
+                                                  file_type=file_type, provider=provider, error_code=error_code,
+                                                  created_after=created_after, created_before=created_before)
     return TaskListResponse(items=items, next_cursor=next_cursor)
 
 

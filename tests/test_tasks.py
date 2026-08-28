@@ -33,6 +33,10 @@ async def wait_for_terminal(task_id: str) -> dict:
 
 @pytest.mark.asyncio
 async def test_upload_only_task_api_returns_path_free_normalized_result() -> None:
+    capabilities = await request("GET", "/api/v1/capabilities")
+    assert capabilities.status_code == 200
+    assert ".json" in capabilities.json()["allowed_suffixes"]
+    assert {"file_type", "provider", "error_code"}.issubset(capabilities.json()["task_filters"])
     response = await request("POST", "/api/v1/tasks/parse", files={"file": ("task.json", b'{"name":"task"}', "application/json")}, data={"data_id": "customer-001"})
 
     assert response.status_code == 202, response.text
@@ -42,6 +46,7 @@ async def test_upload_only_task_api_returns_path_free_normalized_result() -> Non
     task = await wait_for_terminal(submitted["task_id"])
     assert task["status"] == "succeeded"
     assert task["data_id"] == "customer-001"
+    assert task["filename"] == "task.json" and task["content_type"] == "application/json"
     assert task["result"]["document"]["document_type"] == "json"
     assert task["result"]["file_id"] == submitted["file_id"]
     assert task["result"]["quality"]["input_classification"] == "json"
@@ -51,6 +56,17 @@ async def test_upload_only_task_api_returns_path_free_normalized_result() -> Non
     assert downloaded.status_code == 200
     assert json.loads(downloaded.text)["document_type"] == "json"
     assert "path" not in json.dumps(task) and '"path"' not in downloaded.text
+    by_type = await request("GET", "/api/v1/tasks?file_type=json&query=task.json")
+    assert any(item["task_id"] == submitted["task_id"] for item in by_type.json()["items"])
+    provider = task["result"]["provenance"]["provider_chain"][0]
+    by_provider = await request("GET", f"/api/v1/tasks?provider={provider}")
+    assert any(item["task_id"] == submitted["task_id"] for item in by_provider.json()["items"])
+    future = await request("GET", "/api/v1/tasks?created_after=2999-01-01T00:00")
+    assert future.status_code == 200 and future.json()["items"] == []
+    invalid = await request("GET", "/api/v1/tasks?status=anything&sort=descending")
+    assert invalid.status_code == 422
+    expired_cursor = await request("GET", "/api/v1/tasks?cursor=task_" + "f" * 32)
+    assert expired_cursor.status_code == 200 and expired_cursor.json()["items"] == []
 
 
 def test_parse_strategy_accepts_only_bounded_goal_hints() -> None:
@@ -66,6 +82,20 @@ def test_public_document_recursively_removes_server_paths() -> None:
     serialized = json.dumps(document)
     assert "/private/" not in serialized
     assert document["images"][0]["relative_path"] == "images/a.png"
+
+
+@pytest.mark.asyncio
+async def test_manager_filters_persisted_result_facets_and_cursor(tmp_path: Path) -> None:
+    repository = FileTaskRepository(tmp_path / "tasks")
+    result = TaskResultEnvelope(status="failed", file_id="file_" + "d" * 32,
+                                document={"source_file": {"filename": "report.pdf"}, "document_type": "pdf"},
+                                provenance={"provider_chain": ["pdf.normal.test"]}, error={"code": "parse_failed"})
+    record = TaskRecord(task_id="task_" + "5" * 32, file_id=result.file_id, status="failed", result=result,
+                        error={"code": "parse_failed", "message": "failed"})
+    await repository.create(record)
+    manager = PersistentTaskManager(lambda item: asyncio.sleep(0, result=TaskResultEnvelope(status="succeeded", file_id=item.file_id)), repository)
+    items, cursor = await manager.list(status="failed", file_type="pdf", provider="normal", error_code="parse_failed", limit=1)
+    assert [item.task_id for item in items] == [record.task_id] and cursor is None
 
 
 @pytest.mark.asyncio

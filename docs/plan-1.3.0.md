@@ -38,3 +38,7 @@
 - Vitest/RTL 覆盖 API 错误归一化、时间线、状态、artifact、结果 tabs、分页与键盘行为。
 - Playwright Chromium 使用真实后端验证上传、轮询、刷新/深链接、retry、delete、artifact 下载。
 - axe 检查核心流程无 critical/serious 问题。
+
+## 实施说明
+
+任务历史筛选和 cursor 分页全部由 `/api/v1/tasks` 提供，浏览器 URL 只保存可分享的筛选状态，不保存任务事实。`/api/v1/capabilities` 提供允许后缀、上传/结果大小预算和支持的筛选字段。Playwright 启动隔离的真实 FastAPI 后端和 Vite 前端，Chromium 流程覆盖上传、后台轮询、深链接刷新与焦点、artifact 下载、重试、删除和 axe；CI 明确安装浏览器，不依赖开发机环境。
