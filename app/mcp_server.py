@@ -29,23 +29,23 @@ def list_skills() -> list[dict]:
 
 
 @mcp.tool()
-def preview_parse_plan(filename_or_suffix: str, goal: str = "") -> dict:
+def preview_parse_plan(filename_or_suffix: str, goal: str = "", parse_mode: str = "auto") -> dict:
     """仅按展示文件名或后缀预览路由；绝不读取服务端或客户端路径。"""
     _, _, planner, _, _ = runtime()
     candidate = filename_or_suffix.strip()
     if candidate.startswith(".") and "/" not in candidate and "\\" not in candidate:
         candidate = f"preview{candidate}"
     # Path.name deliberately discards any supplied directory portion before planning.
-    return planner.create(Path(candidate).name, goal or None).model_dump(mode="json")
+    return planner.create(Path(candidate).name, goal or None, parse_mode).model_dump(mode="json")
 
 
 @mcp.tool()
-async def submit_file_id(file_id: str, goal: str = "", data_id: str = "") -> dict:
+async def submit_file_id(file_id: str, goal: str = "", data_id: str = "", parse_mode: str = "auto") -> dict:
     """Submit an already uploaded opaque file ID for asynchronous automatic parsing."""
     _, file_store, _, _, task_manager = runtime()
     if not is_valid_id("file", file_id) or file_store.get(file_id) is None:
         return {"error": {"code": "file_not_found", "message": "未找到文件"}}
-    submitted = await task_manager.submit_parse(file_id, goal or None, data_id or None)
+    submitted = await task_manager.submit_parse(file_id, goal or None, data_id or None, parse_mode=parse_mode)
     return submitted.model_dump(mode="json")
 
 

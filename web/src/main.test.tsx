@@ -20,6 +20,20 @@ describe('TaskView accessibility', () => {
     expect(screen.getByRole('img', { name: 'page.png 预览' })).toHaveAttribute('loading', 'lazy')
     expect(screen.getByRole('link', { name: '下载' })).toHaveAttribute('href', '/image.png')
   })
+  it('shows only available result views and expands completed task events on demand', () => {
+    const completed = { ...task, status: 'succeeded', result: { ...task.result, status: 'succeeded', artifacts: [{ artifact_id: 'artifact', filename: 'document.md' }] } }
+    const events = [
+      { sequence: 1, type: 'created', at: new Date().toISOString(), details: {} },
+      { sequence: 2, type: 'planned', at: new Date().toISOString(), details: {} },
+      { sequence: 3, type: 'running', at: new Date().toISOString(), details: {} },
+      { sequence: 4, type: 'finished', at: new Date().toISOString(), details: {} },
+    ]
+    render(<TaskView task={completed as any} headingRef={createRef()} events={events} plans={[]} tables={[]} representations={{}} artifacts={completed.result.artifacts} activeTab="overview" setActiveTab={vi.fn()} onCancel={vi.fn()} onRetry={vi.fn()} onDelete={vi.fn()} backToList={vi.fn()} />)
+    expect(screen.queryByRole('tab', { name: 'HTML 预览' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '展开全部 4 个事件' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '展开全部 4 个事件' }))
+    expect(screen.getByRole('button', { name: '收起事件' })).toBeInTheDocument()
+  })
 })
 
 describe('TaskCenter', () => {

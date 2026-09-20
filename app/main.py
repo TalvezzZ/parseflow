@@ -7,6 +7,7 @@ from pathlib import Path
 from shutil import disk_usage, which
 from time import perf_counter
 from uuid import uuid4
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -109,7 +110,7 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     source_path = file_store.source_path(record.file_id)
     if stored is None or source_path is None:
         return TaskResultEnvelope(status="failed", file_id=record.file_id, error={"code": "file_not_found", "message": "上传文件不存在", "retryable": False})
-    plan = planner.create(stored.filename, record.goal)
+    plan = planner.create(stored.filename, record.goal, record.parse_mode)
     step = plan.steps[0]
     step.status, step.started_at = "running", now()
     def set_plan(current: TaskRecord) -> None:
@@ -117,12 +118,13 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     current = await task_repository.get(record.task_id)
     if current:
         await task_repository.update(current.task_id, current.revision, set_plan)
+    strategy = "ocr_first" if record.parse_mode == "enhanced" and Path(stored.filename).suffix.lower() in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"} else _parse_strategy(record.goal)
     context = ParseContext(file=FileInput(file_id=record.file_id, path=str(source_path), filename=stored.filename, mime_type=stored.content_type),
-                           options=ParseOptions(strategy=_parse_strategy(record.goal)))
+                           options=ParseOptions(strategy=strategy))
     workspace = artifact_repository.workspace(record.task_id)
     context.metadata["artifact_dir"] = str(workspace)
     context.metadata["output_dir"] = str(workspace)
-    result = (await pipeline.execute(context)).model_dump() if step.skill_name == "office.parse_pipeline" else (await executor.execute(step.skill_name, context)).model_dump()
+    result = (await pipeline.execute(context, convert_to_pdf=step.skill_name == "office.pdf_parse_pipeline")).model_dump() if step.skill_name in {"office.parse_pipeline", "office.pdf_parse_pipeline"} else (await executor.execute(step.skill_name, context)).model_dump()
     step.finished_at = now()
     step.status = "succeeded" if result["status"] == "success" else "partial" if result["status"] == "partial" else "failed"
     step.error = result.get("error")
@@ -267,14 +269,17 @@ async def capabilities() -> CapabilitiesResponse:
         max_upload_bytes=settings.file_max_size_mb * 1024 * 1024,
         max_result_bytes=settings.task_max_result_size_mb * 1024 * 1024,
         task_filters=["status", "file_type", "created_after", "created_before", "provider", "error_code", "query"],
+        parse_modes=["auto", "standard", "enhanced"],
     )
 
 
 @app.post("/api/v1/tasks/parse", response_model=TaskSubmitResponse, status_code=202, tags=["任务"])
-async def submit_parse_task(file: UploadFile = File(...), goal: str | None = Form(default=None), data_id: str | None = Form(default=None, max_length=128)) -> TaskSubmitResponse:
+async def submit_parse_task(file: UploadFile = File(...), goal: str | None = Form(default=None),
+                            parse_mode: Literal["auto", "standard", "enhanced"] = Form(default="auto"),
+                            data_id: str | None = Form(default=None, max_length=128)) -> TaskSubmitResponse:
     try:
         stored = await file_store.save(file)
-        return await task_manager.submit_parse(stored.file_id, goal or None, data_id, stored.filename[:255], (stored.content_type or "")[:255] or None)
+        return await task_manager.submit_parse(stored.file_id, goal or None, data_id, parse_mode, stored.filename[:255], (stored.content_type or "")[:255] or None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "upload_rejected", "message": str(exc)}) from exc
     except TaskQueueFullError as exc:

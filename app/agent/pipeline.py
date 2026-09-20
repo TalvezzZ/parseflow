@@ -21,7 +21,7 @@ class OfficeParsePipeline:
         self.executor = executor
         self.converter = converter
 
-    async def execute(self, context: ParseContext) -> PipelineResult:
+    async def execute(self, context: ParseContext, *, convert_to_pdf: bool = False) -> PipelineResult:
         source = Path(context.file.path)
         steps: list[PipelineStep] = []
         started = perf_counter()
@@ -29,8 +29,14 @@ class OfficeParsePipeline:
         target_skill: str | None = None
         conversion: dict[str, Any] | None = None
 
-        if source.suffix.lower() in self.routes:
-            target_format, target_skill = self.routes[source.suffix.lower()]
+        if convert_to_pdf:
+            if "pdf" not in self.converter.supported_conversions.get(source.suffix.lower(), set()):
+                return PipelineResult(status="failed", pipeline_name="office.pdf_parse", source_file=context.file,
+                                      error=ProviderError(code="unsupported_conversion", message=f"不支持转换为 PDF: {source.suffix.lower()}"))
+            target_format, target_skill = "pdf", "pdf.parse"
+        if convert_to_pdf or source.suffix.lower() in self.routes:
+            if not convert_to_pdf:
+                target_format, target_skill = self.routes[source.suffix.lower()]
             conversion_context = context.model_copy(deep=True)
             conversion_context.metadata["target_format"] = target_format
             conversion_context.metadata["output_dir"] = context.metadata.get("output_dir")
@@ -42,7 +48,7 @@ class OfficeParsePipeline:
                                 provider=converted.provider_name, warnings=converted.warnings, error=converted.error)
             steps.append(step)
             if converted.status != "success" or not converted.data.get("conversion"):
-                return PipelineResult(status="failed", pipeline_name="office.parse", source_file=context.file,
+                return PipelineResult(status="failed", pipeline_name="office.pdf_parse" if convert_to_pdf else "office.parse", source_file=context.file,
                                       steps=steps, error=converted.error or ProviderError(code="conversion_failed", message="Office 转换失败"),
                                       duration_ms=int((perf_counter() - started) * 1000))
             conversion = converted.data["conversion"]
@@ -61,7 +67,7 @@ class OfficeParsePipeline:
         data = dict(parsed.data)
         if conversion:
             data["conversion"] = conversion
-        return PipelineResult(status=parsed.status, pipeline_name="office.parse", source_file=context.file,
+        return PipelineResult(status=parsed.status, pipeline_name="office.pdf_parse" if convert_to_pdf else "office.parse", source_file=context.file,
                               steps=steps, result=data, warnings=parsed.warnings,
                               error=parsed.error, duration_ms=int((perf_counter() - started) * 1000))
 

@@ -26,6 +26,7 @@ class PlanStep(BaseModel):
 class ParsePlan(BaseModel):
     plan_id: str
     goal: str
+    parse_mode: Literal["auto", "standard", "enhanced"] = "auto"
     planner: dict[str, str] = Field(default_factory=lambda: {"name": "rule-based", "version": __version__})
     status: Literal["planned", "running", "completed", "failed"] = "planned"
     created_at: datetime = Field(default_factory=now)

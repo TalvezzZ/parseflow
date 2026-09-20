@@ -95,6 +95,16 @@
               }
             ],
             "title": "Goal"
+          },
+          "parse_mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "standard",
+              "enhanced"
+            ],
+            "title": "Parse Mode",
+            "type": "string"
           }
         },
         "required": [
@@ -133,6 +143,18 @@
           "max_upload_bytes": {
             "title": "Max Upload Bytes",
             "type": "integer"
+          },
+          "parse_modes": {
+            "items": {
+              "enum": [
+                "auto",
+                "standard",
+                "enhanced"
+              ],
+              "type": "string"
+            },
+            "title": "Parse Modes",
+            "type": "array"
           },
           "task_filters": {
             "items": {
@@ -417,6 +439,16 @@
               }
             ],
             "title": "Goal"
+          },
+          "parse_mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "standard",
+              "enhanced"
+            ],
+            "title": "Parse Mode",
+            "type": "string"
           },
           "plan": {
             "anyOf": [
@@ -706,7 +738,7 @@
   "info": {
     "description": "基于 LangChain 和 Skill 的文档解析 Agent",
     "title": "Parse Agent",
-    "version": "1.3.0"
+    "version": "1.3.1"
   },
   "openapi": "3.1.0",
   "paths": {

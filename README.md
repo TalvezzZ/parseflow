@@ -7,6 +7,7 @@ ParseFlow accepts a single file, automatically selects an appropriate parsing wo
 ## Highlights
 
 - **Automatic planning** — selects a registered Skill by file type; no model API key is required for the default rule-based workflow.
+- **Selectable parsing tiers** — leave the default on **智能默认**, choose **标准解析** for native/fast extraction, or **增强解析** for OCR-first PDFs/images and Office-to-PDF layout parsing.
 - **Multi-format parsing** — documents, Office files, structured text, spreadsheets, presentations, audio, and video.
 - **Structured results** — normalized document model with blocks, tables, images, Markdown, plain text, provenance, warnings, and artifacts.
 - **Safe spreadsheet handling** — XLSX/XLSM semantic-cell scanning avoids traversing oversized, style-polluted used ranges.
@@ -148,7 +149,8 @@ Create an automatically planned parsing task by uploading a single file:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/tasks/parse \
   -F 'file=@./report.xlsx' \
-  -F 'goal=提取表格并输出 Markdown'
+  -F 'goal=提取表格并输出 Markdown' \
+  -F 'parse_mode=enhanced'
 ```
 
 The response contains a `task_id`. Query the task for the plan, step state, and final result:

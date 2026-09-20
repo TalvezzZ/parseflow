@@ -44,6 +44,7 @@ class TaskRecord(BaseModel):
     content_type: str | None = Field(default=None, max_length=255)
     status: TaskStatus = "queued"
     goal: str | None = None
+    parse_mode: Literal["auto", "standard", "enhanced"] = "auto"
     data_id: str | None = Field(default=None, max_length=128)
     retry_of: str | None = None
     cancel_requested: bool = False
@@ -77,6 +78,7 @@ class CapabilitiesResponse(BaseModel):
     max_upload_bytes: int
     max_result_bytes: int
     task_filters: list[str]
+    parse_modes: list[Literal["auto", "standard", "enhanced"]] = Field(default_factory=lambda: ["auto", "standard", "enhanced"])
 
 
 class TaskMetrics(BaseModel):

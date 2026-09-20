@@ -1,5 +1,6 @@
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from app.planning.models import ParsePlan, PlanStep
 from app.skills.registry import SkillRegistry
@@ -53,17 +54,40 @@ class RuleBasedPlanner:
     def __init__(self, registry: SkillRegistry) -> None:
         self.registry = registry
 
-    def create(self, path: str, goal: str | None = None) -> ParsePlan:
+    def create(self, path: str, goal: str | None = None,
+               parse_mode: Literal["auto", "standard", "enhanced"] = "auto") -> ParsePlan:
+        """Create a safe plan for the requested quality tier.
+
+        ``standard`` preserves the fast native route. ``enhanced`` normalizes
+        PDF/image-like Office documents through LibreOffice into PDF before OCR
+        or layout-aware parsing. ``auto`` stays compatible with prior routing
+        while using enhanced normalization for legacy Office formats.
+        """
         suffix = Path(path).suffix.lower()
+        if parse_mode not in {"auto", "standard", "enhanced"}:
+            raise ValueError(f"不支持的解析模式: {parse_mode}")
         route = self.routes.get(suffix)
         if route is None:
             raise ValueError(f"当前系统无法自动规划该文件格式: {suffix or '<无后缀>'}")
         skill_name, reason = route
-        if skill_name != "office.parse_pipeline":
-            self.registry.get(skill_name)
         warnings = []
+
+        # Enhanced parsing is intentionally limited to document formats where
+        # PDF normalization improves visual-layout/OCR fidelity. Native Office
+        # extractors remain the default for structured spreadsheets/slides.
+        enhanced_office = {".doc", ".docx", ".rtf", ".odt", ".ppt", ".pptx", ".odp", ".xls", ".xlsx", ".xlsm", ".ods"}
+        if parse_mode == "enhanced" and suffix in enhanced_office:
+            skill_name = "office.pdf_parse_pipeline"
+            reason = "已选择增强解析：先转换为 PDF，再按版面和 OCR 路径解析"
+        elif parse_mode == "enhanced" and suffix in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}:
+            reason += "（增强模式：优先 OCR/版面解析）"
+        elif parse_mode == "standard":
+            reason += "（标准模式：使用原生快速解析路径）"
+
+        if skill_name not in {"office.parse_pipeline", "office.pdf_parse_pipeline"}:
+            self.registry.get(skill_name)
         if skill_name in {"audio.prepare", "video.prepare"}:
             warnings.append("当前未配置 ASR Provider，将完成媒体预处理但不会生成语音转录文本。")
-        return ParsePlan(plan_id=f"plan_{uuid.uuid4().hex}", goal=goal or "自动提取文件中的可用结构化内容", steps=[
-            PlanStep(step_id="step-1", skill_name=skill_name, reason=reason),
-        ], warnings=warnings)
+        return ParsePlan(plan_id=f"plan_{uuid.uuid4().hex}", goal=goal or "自动提取文件中的可用结构化内容",
+                         parse_mode=parse_mode, steps=[PlanStep(step_id="step-1", skill_name=skill_name, reason=reason)],
+                         warnings=warnings)

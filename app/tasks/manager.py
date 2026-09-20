@@ -83,6 +83,7 @@ class PersistentTaskManager:
         self._started = False
 
     async def submit_parse(self, file_id: str, goal: str | None, data_id: str | None,
+                           parse_mode: str = "auto",
                            filename: str | None = None, content_type: str | None = None) -> TaskSubmitResponse:
         await self.start()
         if not self._accepting:
@@ -90,7 +91,7 @@ class PersistentTaskManager:
         if self._queue.qsize() >= self.max_queue_size:
             raise TaskQueueFullError(self._queue.qsize(), self.max_queue_size)
         record = TaskRecord(task_id=new_id("task"), file_id=file_id, filename=filename, content_type=content_type,
-                            goal=goal, data_id=data_id)
+                            goal=goal, parse_mode=parse_mode, data_id=data_id)
         await self.repository.create(record)
         await self.events.append(record.task_id, "created", message="任务已创建")
         await self.events.append(record.task_id, "queued", message="任务已进入队列")
@@ -168,7 +169,8 @@ class PersistentTaskManager:
         record = await self.get(task_id)
         if record is None or record.status not in TERMINAL_STATUSES:
             return None
-        submitted = await self.submit_parse(record.file_id, record.goal, record.data_id, record.filename, record.content_type)
+        submitted = await self.submit_parse(record.file_id, record.goal, record.data_id, record.parse_mode,
+                                            record.filename, record.content_type)
         created = await self.get(submitted.task_id)
         if created:
             await self.repository.update(created.task_id, created.revision, lambda item: setattr(item, "retry_of", task_id))

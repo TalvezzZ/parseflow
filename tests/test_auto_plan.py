@@ -46,6 +46,27 @@ async def test_single_upload_creates_plan_and_executes_xlsx(tmp_path: Path) -> N
     assert task["plan"]["steps"][0]["status"] == "succeeded"
     assert task["result"]["file_id"].startswith("file_")
     assert task["result"]["document"]["document_type"] == "xlsx"
+    assert task["parse_mode"] == "auto"
+
+
+def test_enhanced_office_plan_converts_to_pdf_before_parsing() -> None:
+    from app.main import planner
+
+    plan = planner.create("report.docx", parse_mode="enhanced")
+
+    assert plan.parse_mode == "enhanced"
+    assert plan.steps[0].skill_name == "office.pdf_parse_pipeline"
+    assert "转换为 PDF" in plan.steps[0].reason
+
+
+def test_standard_pdf_plan_keeps_native_route() -> None:
+    from app.main import planner
+
+    plan = planner.create("report.pdf", parse_mode="standard")
+
+    assert plan.parse_mode == "standard"
+    assert plan.steps[0].skill_name == "pdf.parse"
+    assert "标准模式" in plan.steps[0].reason
 
 
 @pytest.mark.asyncio
