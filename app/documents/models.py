@@ -166,6 +166,9 @@ class DocumentPage(BaseModel):
     page_number: int
     text: str = ""
     blocks: list[DocumentBlock] = Field(default_factory=list)
+    width: int | None = None
+    height: int | None = None
+    preview: dict[str, Any] | None = None
 
 
 class DocumentResult(BaseModel):

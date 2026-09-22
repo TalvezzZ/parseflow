@@ -118,9 +118,10 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     current = await task_repository.get(record.task_id)
     if current:
         await task_repository.update(current.task_id, current.revision, set_plan)
-    strategy = "ocr_first" if record.parse_mode == "enhanced" and Path(stored.filename).suffix.lower() in {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"} else _parse_strategy(record.goal)
+    # Enhanced parsing always requests OCR. Office inputs are normalized to PDF by the pipeline first.
+    strategy = "ocr_first" if record.parse_mode == "enhanced" else _parse_strategy(record.goal)
     context = ParseContext(file=FileInput(file_id=record.file_id, path=str(source_path), filename=stored.filename, mime_type=stored.content_type),
-                           options=ParseOptions(strategy=strategy))
+                           goal=record.goal or "解析文件", options=ParseOptions(strategy=strategy))
     workspace = artifact_repository.workspace(record.task_id)
     context.metadata["artifact_dir"] = str(workspace)
     context.metadata["output_dir"] = str(workspace)

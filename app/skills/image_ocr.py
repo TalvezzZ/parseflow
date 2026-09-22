@@ -1,5 +1,6 @@
 import asyncio
 import json
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -65,7 +66,18 @@ class PaddleOcrImageProvider(Provider):
         if not plain_text.strip():
             return self._failed("quality_insufficient", "PaddleOCR 未提取到可用文本")
 
-        page = DocumentPage(page_number=1, text=plain_text, blocks=blocks)
+        preview: dict[str, Any] | None = None
+        artifact_dir_value = str(context.metadata.get("artifact_dir") or "")
+        if artifact_dir_value:
+            artifact_dir = Path(artifact_dir_value)
+            preview_dir = artifact_dir / "ocr-pages"
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            extension = source.suffix.lower() or ".png"
+            artifact_name = f"ocr-page-0001{extension}"
+            preview_path = preview_dir / artifact_name
+            shutil.copyfile(source, preview_path)
+            preview = {"filename": artifact_name, "relative_path": preview_path.relative_to(artifact_dir).as_posix(), "content_type": context.file.mime_type or "image/png"}
+        page = DocumentPage(page_number=1, text=plain_text, blocks=blocks, width=width, height=height, preview=preview)
         document = DocumentResult(
             document_id=context.file.file_id,
             source_file=context.file,

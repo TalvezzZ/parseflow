@@ -1,6 +1,7 @@
 import asyncio
 import json
 import tempfile
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -68,10 +69,20 @@ class PaddleOcrPdfProvider(Provider):
                 document_pages: list[DocumentPage] = []
                 blocks: list[DocumentBlock] = []
                 markdown_parts: list[str] = []
+                artifact_dir = Path(str(context.metadata.get("artifact_dir") or ""))
                 for page_number, image_path in pages:
                     page_blocks = self._recognize_page(ocr, image_path, page_number)
                     page_text = "\n".join(block.text for block in page_blocks if block.text)
-                    document_pages.append(DocumentPage(page_number=page_number, text=page_text, blocks=page_blocks))
+                    width, height = self._image_size(image_path) if image_path.is_file() else (0, 0)
+                    preview: dict[str, Any] | None = None
+                    if str(context.metadata.get("artifact_dir") or "") and image_path.is_file():
+                        preview_dir = artifact_dir / "ocr-pages"
+                        preview_dir.mkdir(parents=True, exist_ok=True)
+                        artifact_name = f"ocr-page-{page_number:04d}.png"
+                        preview_path = preview_dir / artifact_name
+                        shutil.copyfile(image_path, preview_path)
+                        preview = {"filename": artifact_name, "relative_path": preview_path.relative_to(artifact_dir).as_posix(), "content_type": "image/png"}
+                    document_pages.append(DocumentPage(page_number=page_number, text=page_text, blocks=page_blocks, width=width, height=height, preview=preview))
                     blocks.extend(page_blocks)
                     markdown_parts.append(f"## 第 {page_number} 页\n\n{page_text}" if page_text else f"## 第 {page_number} 页")
         except ValueError as exc:
@@ -136,6 +147,12 @@ class PaddleOcrPdfProvider(Provider):
             return rendered
         finally:
             document.close()
+
+    @staticmethod
+    def _image_size(image_path: Path) -> tuple[int, int]:
+        from PIL import Image
+        with Image.open(image_path) as image:
+            return image.width, image.height
 
     def _recognize_page(self, ocr: Any, image_path: Path, page_number: int) -> list[DocumentBlock]:
         if hasattr(ocr, "predict"):
