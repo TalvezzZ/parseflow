@@ -30,7 +30,7 @@ class TaskEventList(BaseModel):
 class FileTaskEventRepository:
     """Atomic, path-free per-task event timelines."""
 
-    FORBIDDEN_DETAILS = {"path", "output_dir", "source_path", "target_path", "artifact_path", "callback", "content"}
+    FORBIDDEN_DETAILS = {"path", "output_dir", "source_path", "target_path", "artifact_path", "artifact_dir", "callback", "content"}
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).resolve()

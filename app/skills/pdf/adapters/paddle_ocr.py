@@ -81,7 +81,9 @@ class PaddleOcrPdfProvider(Provider):
                         artifact_name = f"ocr-page-{page_number:04d}.png"
                         preview_path = preview_dir / artifact_name
                         shutil.copyfile(image_path, preview_path)
-                        preview = {"filename": artifact_name, "relative_path": preview_path.relative_to(artifact_dir).as_posix(), "content_type": "image/png"}
+                        # Only display metadata belongs in the public result; the internal
+                        # storage key stays server-side and is resolved via the artifact API.
+                        preview = {"filename": artifact_name, "content_type": "image/png"}
                     document_pages.append(DocumentPage(page_number=page_number, text=page_text, blocks=page_blocks, width=width, height=height, preview=preview))
                     blocks.extend(page_blocks)
                     markdown_parts.append(f"## 第 {page_number} 页\n\n{page_text}" if page_text else f"## 第 {page_number} 页")

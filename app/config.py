@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     storage_min_free_mb: int = 1024
     storage_soft_free_mb: int = 2048
     storage_tmp_max_age_seconds: int = 86400
+    # Orphan artifact/upload directories are only reclaimed after this age, since
+    # an upload directory is created before its task record exists.
+    storage_orphan_min_age_seconds: int = 3600
     data_dir: str = "./data"
     file_storage_dir: str = "./data/files"
     file_max_size_mb: int = 100

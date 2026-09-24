@@ -1,5 +1,6 @@
 import asyncio
 import json
+import mimetypes
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -76,7 +77,9 @@ class PaddleOcrImageProvider(Provider):
             artifact_name = f"ocr-page-0001{extension}"
             preview_path = preview_dir / artifact_name
             shutil.copyfile(source, preview_path)
-            preview = {"filename": artifact_name, "relative_path": preview_path.relative_to(artifact_dir).as_posix(), "content_type": context.file.mime_type or "image/png"}
+            # Only display metadata belongs in the public result; the internal
+            # storage key stays server-side and is resolved via the artifact API.
+            preview = {"filename": artifact_name, "content_type": mimetypes.guess_type(artifact_name)[0] or "image/png"}
         page = DocumentPage(page_number=1, text=plain_text, blocks=blocks, width=width, height=height, preview=preview)
         document = DocumentResult(
             document_id=context.file.file_id,

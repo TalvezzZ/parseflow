@@ -6,10 +6,12 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 from app.documents.models import ProviderError
+from app.observability import logger
 from app.storage.ids import new_id
 from app.tasks.events import FileTaskEventRepository
 from app.tasks.models import TERMINAL_STATUSES, TaskMetrics, TaskRecord, TaskResultEnvelope, TaskSubmitResponse, utc_now
 from app.tasks.repository import FileTaskRepository, TaskRevisionConflictError
+from app.tasks.retention import TaskStorageReclaimer
 
 
 TaskRunner = Callable[[TaskRecord], Awaitable[TaskResultEnvelope]]
@@ -28,10 +30,13 @@ class PersistentTaskManager:
     def __init__(self, runner: TaskRunner, repository: FileTaskRepository, *, max_concurrent_executions: int = 2,
                  max_queue_size: int = 100, default_timeout_seconds: int = 1800,
                  result_ttl_seconds: int = 86400, cleanup_interval_seconds: int = 300,
-                 event_repository: FileTaskEventRepository | None = None) -> None:
+                 event_repository: FileTaskEventRepository | None = None,
+                 reclaimer: TaskStorageReclaimer | None = None) -> None:
         self.runner = runner
         self.repository = repository
         self.events = event_repository or FileTaskEventRepository(repository.root.parent / "events")
+        # repository.root is <data>/tasks; storage lives alongside it under <data>.
+        self.reclaimer = reclaimer or TaskStorageReclaimer(repository.root.parent, repository)
         self.max_concurrent_executions = max_concurrent_executions
         self.max_queue_size = max_queue_size
         self.default_timeout_seconds = default_timeout_seconds
@@ -184,6 +189,12 @@ class PersistentTaskManager:
             raise ValueError("active_task_cannot_delete")
         await self.repository.delete(task_id)
         await self.events.delete(task_id)
+        # Storage reclamation must not fail the delete: the task record is already
+        # gone, so a leftover directory is a janitor concern, not a client error.
+        try:
+            await self.reclaimer.reclaim_task(record)
+        except Exception:
+            logger.warning("Failed to reclaim storage for deleted task %s", task_id, exc_info=True)
         return True
 
     async def cancel(self, task_id: str) -> TaskRecord | None:
@@ -297,6 +308,15 @@ class PersistentTaskManager:
                 if record.status in TERMINAL_STATUSES and record.finished_at and record.finished_at < cutoff:
                     await self.repository.delete(record.task_id)
                     await self.events.delete(record.task_id)
+                    try:
+                        await self.reclaimer.reclaim_task(record)
+                    except Exception:
+                        logger.warning("Failed to reclaim expired task %s", record.task_id, exc_info=True)
+            # Recover directories left behind by interrupted deletes or crashes.
+            try:
+                await self.reclaimer.sweep_orphans()
+            except Exception:
+                logger.warning("Orphan storage sweep failed", exc_info=True)
 
 
 # v0.8.0 intentionally removes the in-memory/callback implementation.

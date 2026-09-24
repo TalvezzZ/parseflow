@@ -30,6 +30,7 @@ from app.tasks.exports import ExportLimitExceeded, generate_document_exports
 from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
 from app.tasks.models import ArtifactListResponse, CapabilitiesResponse, TaskListResponse, TaskRecord, TaskResultEnvelope, TaskSubmitResponse
 from app.tasks.repository import FileTaskRepository
+from app.tasks.retention import TaskStorageReclaimer
 from app.version import __version__
 
 settings = get_settings()
@@ -53,7 +54,9 @@ pipeline = OfficeParsePipeline(executor, LibreOfficeProvider(command=settings.of
 
 def _public_document(value: object) -> dict | None:
     """Recursively project an internal DocumentResult into a path-free public document."""
-    forbidden = {"path", "output_dir", "source_path", "target_path", "artifact_path", "callback"}
+    # artifact_dir is an absolute server path written by the Word/Excel/PPT providers;
+    # it must never reach a public response.
+    forbidden = {"path", "output_dir", "source_path", "target_path", "artifact_path", "artifact_dir", "callback"}
 
     def sanitize(item: object) -> object:
         if isinstance(item, dict):
@@ -160,7 +163,9 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
 
 task_manager = PersistentTaskManager(run_parse_intent, task_repository, max_concurrent_executions=settings.task_max_concurrent_executions,
                                      max_queue_size=settings.task_queue_max_size, default_timeout_seconds=settings.task_default_timeout_seconds,
-                                     result_ttl_seconds=settings.task_result_ttl_seconds, cleanup_interval_seconds=settings.task_cleanup_interval_seconds)
+                                     result_ttl_seconds=settings.task_result_ttl_seconds, cleanup_interval_seconds=settings.task_cleanup_interval_seconds,
+                                     reclaimer=TaskStorageReclaimer(data_root, task_repository, file_store=file_store,
+                                                                    orphan_min_age_seconds=settings.storage_orphan_min_age_seconds))
 
 from app.mcp_server import mcp
 
