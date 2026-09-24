@@ -1,32 +1,834 @@
 {
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Parse Agent",
+    "description": "基于 LangChain 和 Skill 的文档解析 Agent",
+    "version": "1.4.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "系统"
+        ],
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [
+          "系统"
+        ],
+        "summary": "Ready",
+        "description": "Check repositories, writable storage, registry and workers without running parsers or downloading models.",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Ready Ready Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files": {
+      "post": {
+        "tags": [
+          "文件"
+        ],
+        "summary": "Upload File",
+        "operationId": "upload_file_api_v1_files_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_file_api_v1_files_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredFilePublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{file_id}": {
+      "get": {
+        "tags": [
+          "文件"
+        ],
+        "summary": "Get File",
+        "operationId": "get_file_api_v1_files__file_id__get",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredFilePublic"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{file_id}/content": {
+      "get": {
+        "tags": [
+          "文件"
+        ],
+        "summary": "Download File",
+        "operationId": "download_file_api_v1_files__file_id__content_get",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "tags": [
+          "系统"
+        ],
+        "summary": "Capabilities",
+        "operationId": "capabilities_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/parse": {
+      "post": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "Submit Parse Task",
+        "operationId": "submit_parse_task_api_v1_tasks_parse_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_submit_parse_task_api_v1_tasks_parse_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskSubmitResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks": {
+      "get": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "List Tasks",
+        "operationId": "list_tasks_api_v1_tasks_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(queued|planning|running|cancelling|succeeded|partial|failed|cancelled|interrupted)$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(created_desc|created_asc)$",
+              "default": "created_desc",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "file_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 32
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "File Type"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider"
+            }
+          },
+          {
+            "name": "error_code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error Code"
+            }
+          },
+          {
+            "name": "created_after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created After"
+            }
+          },
+          {
+            "name": "created_before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{task_id}": {
+      "get": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "Get Task",
+        "operationId": "get_task_api_v1_tasks__task_id__get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "Delete Task",
+        "operationId": "delete_task_api_v1_tasks__task_id__delete",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{task_id}/events": {
+      "get": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "List Task Events",
+        "operationId": "list_task_events_api_v1_tasks__task_id__events_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "After"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskEventList"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{task_id}/cancel": {
+      "post": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "Cancel Task",
+        "operationId": "cancel_task_api_v1_tasks__task_id__cancel_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{task_id}/retry": {
+      "post": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "Retry Task",
+        "operationId": "retry_task_api_v1_tasks__task_id__retry_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskSubmitResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{task_id}/artifacts": {
+      "get": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "List Artifacts",
+        "operationId": "list_artifacts_api_v1_tasks__task_id__artifacts_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{task_id}/artifacts/{artifact_id}": {
+      "get": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "Download Artifact",
+        "operationId": "download_artifact_api_v1_tasks__task_id__artifacts__artifact_id__get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/metrics": {
+      "get": {
+        "tags": [
+          "系统"
+        ],
+        "summary": "Metrics",
+        "operationId": "metrics_api_v1_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Metrics Api V1 Metrics Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/skills": {
+      "get": {
+        "tags": [
+          "Skill"
+        ],
+        "summary": "List Skills",
+        "operationId": "list_skills_api_v1_skills_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response List Skills Api V1 Skills Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
   "components": {
     "schemas": {
       "ArtifactListResponse": {
         "properties": {
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
           "artifacts": {
             "items": {
               "$ref": "#/components/schemas/ArtifactRecord"
             },
-            "title": "Artifacts",
-            "type": "array"
-          },
-          "task_id": {
-            "title": "Task Id",
-            "type": "string"
+            "type": "array",
+            "title": "Artifacts"
           }
         },
+        "type": "object",
         "required": [
           "task_id",
           "artifacts"
         ],
-        "title": "ArtifactListResponse",
-        "type": "object"
+        "title": "ArtifactListResponse"
       },
       "ArtifactRecord": {
         "properties": {
           "artifact_id": {
-            "title": "Artifact Id",
-            "type": "string"
+            "type": "string",
+            "title": "Artifact Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
           },
           "content_type": {
             "anyOf": [
@@ -39,51 +841,35 @@
             ],
             "title": "Content Type"
           },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
           },
-          "filename": {
-            "title": "Filename",
-            "type": "string"
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
           },
           "kind": {
-            "default": "file",
+            "type": "string",
             "title": "Kind",
-            "type": "string"
-          },
-          "size_bytes": {
-            "title": "Size Bytes",
-            "type": "integer"
+            "default": "file"
           }
         },
+        "type": "object",
         "required": [
           "artifact_id",
           "filename",
           "size_bytes"
         ],
-        "title": "ArtifactRecord",
-        "type": "object"
+        "title": "ArtifactRecord"
       },
       "Body_submit_parse_task_api_v1_tasks_parse_post": {
         "properties": {
-          "data_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Data Id"
-          },
           "file": {
+            "type": "string",
             "contentMediaType": "application/octet-stream",
-            "title": "File",
-            "type": "string"
+            "title": "File"
           },
           "goal": {
             "anyOf": [
@@ -97,35 +883,47 @@
             "title": "Goal"
           },
           "parse_mode": {
-            "default": "auto",
+            "type": "string",
             "enum": [
               "auto",
               "standard",
               "enhanced"
             ],
             "title": "Parse Mode",
-            "type": "string"
+            "default": "auto"
+          },
+          "data_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Id"
           }
         },
+        "type": "object",
         "required": [
           "file"
         ],
-        "title": "Body_submit_parse_task_api_v1_tasks_parse_post",
-        "type": "object"
+        "title": "Body_submit_parse_task_api_v1_tasks_parse_post"
       },
       "Body_upload_file_api_v1_files_post": {
         "properties": {
           "file": {
+            "type": "string",
             "contentMediaType": "application/octet-stream",
-            "title": "File",
-            "type": "string"
+            "title": "File"
           }
         },
+        "type": "object",
         "required": [
           "file"
         ],
-        "title": "Body_upload_file_api_v1_files_post",
-        "type": "object"
+        "title": "Body_upload_file_api_v1_files_post"
       },
       "CapabilitiesResponse": {
         "properties": {
@@ -133,45 +931,45 @@
             "items": {
               "type": "string"
             },
-            "title": "Allowed Suffixes",
-            "type": "array"
-          },
-          "max_result_bytes": {
-            "title": "Max Result Bytes",
-            "type": "integer"
+            "type": "array",
+            "title": "Allowed Suffixes"
           },
           "max_upload_bytes": {
-            "title": "Max Upload Bytes",
-            "type": "integer"
+            "type": "integer",
+            "title": "Max Upload Bytes"
           },
-          "parse_modes": {
-            "items": {
-              "enum": [
-                "auto",
-                "standard",
-                "enhanced"
-              ],
-              "type": "string"
-            },
-            "title": "Parse Modes",
-            "type": "array"
+          "max_result_bytes": {
+            "type": "integer",
+            "title": "Max Result Bytes"
           },
           "task_filters": {
             "items": {
               "type": "string"
             },
-            "title": "Task Filters",
-            "type": "array"
+            "type": "array",
+            "title": "Task Filters"
+          },
+          "parse_modes": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "standard",
+                "enhanced"
+              ]
+            },
+            "type": "array",
+            "title": "Parse Modes"
           }
         },
+        "type": "object",
         "required": [
           "allowed_suffixes",
           "max_upload_bytes",
           "max_result_bytes",
           "task_filters"
         ],
-        "title": "CapabilitiesResponse",
-        "type": "object"
+        "title": "CapabilitiesResponse"
       },
       "HTTPValidationError": {
         "properties": {
@@ -179,15 +977,23 @@
             "items": {
               "$ref": "#/components/schemas/ValidationError"
             },
-            "title": "Detail",
-            "type": "array"
+            "type": "array",
+            "title": "Detail"
           }
         },
-        "title": "HTTPValidationError",
-        "type": "object"
+        "type": "object",
+        "title": "HTTPValidationError"
       },
       "StoredFilePublic": {
         "properties": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
           "content_type": {
             "anyOf": [
               {
@@ -199,28 +1005,21 @@
             ],
             "title": "Content Type"
           },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
           "created_at": {
+            "type": "string",
             "format": "date-time",
-            "title": "Created At",
-            "type": "string"
+            "title": "Created At"
           },
           "download_url": {
-            "title": "Download Url",
-            "type": "string"
-          },
-          "file_id": {
-            "title": "File Id",
-            "type": "string"
-          },
-          "filename": {
-            "title": "Filename",
-            "type": "string"
-          },
-          "size_bytes": {
-            "title": "Size Bytes",
-            "type": "integer"
+            "type": "string",
+            "title": "Download Url"
           }
         },
+        "type": "object",
         "required": [
           "file_id",
           "filename",
@@ -228,35 +1027,26 @@
           "created_at",
           "download_url"
         ],
-        "title": "StoredFilePublic",
-        "type": "object"
+        "title": "StoredFilePublic"
       },
       "TaskEvent": {
         "properties": {
-          "at": {
-            "title": "At",
-            "type": "string"
-          },
-          "details": {
-            "additionalProperties": true,
-            "title": "Details",
-            "type": "object"
-          },
-          "message": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Message"
-          },
           "sequence": {
+            "type": "integer",
             "minimum": 1.0,
-            "title": "Sequence",
-            "type": "integer"
+            "title": "Sequence"
+          },
+          "type": {
+            "type": "string",
+            "title": "Type"
+          },
+          "at": {
+            "type": "string",
+            "title": "At"
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
           },
           "step": {
             "anyOf": [
@@ -269,23 +1059,31 @@
             ],
             "title": "Step"
           },
-          "task_id": {
-            "title": "Task Id",
-            "type": "string"
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
           },
-          "type": {
-            "title": "Type",
-            "type": "string"
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
           }
         },
+        "type": "object",
         "required": [
           "sequence",
           "type",
           "at",
           "task_id"
         ],
-        "title": "TaskEvent",
-        "type": "object"
+        "title": "TaskEvent"
       },
       "TaskEventList": {
         "properties": {
@@ -293,8 +1091,8 @@
             "items": {
               "$ref": "#/components/schemas/TaskEvent"
             },
-            "title": "Items",
-            "type": "array"
+            "type": "array",
+            "title": "Items"
           },
           "next_after": {
             "anyOf": [
@@ -308,11 +1106,11 @@
             "title": "Next After"
           }
         },
+        "type": "object",
         "required": [
           "items"
         ],
-        "title": "TaskEventList",
-        "type": "object"
+        "title": "TaskEventList"
       },
       "TaskListResponse": {
         "properties": {
@@ -320,8 +1118,8 @@
             "items": {
               "$ref": "#/components/schemas/TaskRecord"
             },
-            "title": "Items",
-            "type": "array"
+            "type": "array",
+            "title": "Items"
           },
           "next_cursor": {
             "anyOf": [
@@ -335,81 +1133,44 @@
             "title": "Next Cursor"
           }
         },
+        "type": "object",
         "required": [
           "items"
         ],
-        "title": "TaskListResponse",
-        "type": "object"
+        "title": "TaskListResponse"
       },
       "TaskRecord": {
-        "description": "Durable internal task record. `request` contains opaque IDs only.",
         "properties": {
-          "cancel_requested": {
-            "default": false,
-            "title": "Cancel Requested",
-            "type": "boolean"
+          "schema_version": {
+            "type": "integer",
+            "const": 1,
+            "title": "Schema Version",
+            "default": 1
           },
-          "content_type": {
-            "anyOf": [
-              {
-                "maxLength": 255,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Content Type"
+          "revision": {
+            "type": "integer",
+            "title": "Revision",
+            "default": 0
           },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
           },
-          "data_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Data Id"
-          },
-          "duration_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Duration Ms"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Error"
+          "task_type": {
+            "type": "string",
+            "const": "parse.intent",
+            "title": "Task Type",
+            "default": "parse.intent"
           },
           "file_id": {
-            "title": "File Id",
-            "type": "string"
+            "type": "string",
+            "title": "File Id"
           },
           "filename": {
             "anyOf": [
               {
-                "maxLength": 255,
-                "type": "string"
+                "type": "string",
+                "maxLength": 255
               },
               {
                 "type": "null"
@@ -417,17 +1178,33 @@
             ],
             "title": "Filename"
           },
-          "finished_at": {
+          "content_type": {
             "anyOf": [
               {
-                "format": "date-time",
-                "type": "string"
+                "type": "string",
+                "maxLength": 255
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Finished At"
+            "title": "Content Type"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "planning",
+              "running",
+              "cancelling",
+              "succeeded",
+              "partial",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ],
+            "title": "Status",
+            "default": "queued"
           },
           "goal": {
             "anyOf": [
@@ -441,14 +1218,42 @@
             "title": "Goal"
           },
           "parse_mode": {
-            "default": "auto",
+            "type": "string",
             "enum": [
               "auto",
               "standard",
               "enhanced"
             ],
             "title": "Parse Mode",
-            "type": "string"
+            "default": "auto"
+          },
+          "data_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data Id"
+          },
+          "retry_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry Of"
+          },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested",
+            "default": false
           },
           "plan": {
             "anyOf": [
@@ -472,98 +1277,7 @@
               }
             ]
           },
-          "retry_of": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Retry Of"
-          },
-          "revision": {
-            "default": 0,
-            "title": "Revision",
-            "type": "integer"
-          },
-          "schema_version": {
-            "const": 1,
-            "default": 1,
-            "title": "Schema Version",
-            "type": "integer"
-          },
-          "started_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Started At"
-          },
-          "status": {
-            "default": "queued",
-            "enum": [
-              "queued",
-              "planning",
-              "running",
-              "cancelling",
-              "succeeded",
-              "partial",
-              "failed",
-              "cancelled",
-              "interrupted"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "task_id": {
-            "title": "Task Id",
-            "type": "string"
-          },
-          "task_type": {
-            "const": "parse.intent",
-            "default": "parse.intent",
-            "title": "Task Type",
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          },
-          "warnings": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Warnings",
-            "type": "array"
-          }
-        },
-        "required": [
-          "task_id",
-          "file_id"
-        ],
-        "title": "TaskRecord",
-        "type": "object"
-      },
-      "TaskResultEnvelope": {
-        "description": "Stable public result shape, independent of the executed Skill/Pipeline.",
-        "properties": {
-          "artifacts": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "title": "Artifacts",
-            "type": "array"
-          },
-          "conversion": {
+          "error": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -573,7 +1287,83 @@
                 "type": "null"
               }
             ],
-            "title": "Conversion"
+            "title": "Error"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task_id",
+          "file_id"
+        ],
+        "title": "TaskRecord",
+        "description": "Durable internal task record. `request` contains opaque IDs only."
+      },
+      "TaskResultEnvelope": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "succeeded",
+              "partial",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
           },
           "document": {
             "anyOf": [
@@ -587,6 +1377,56 @@
             ],
             "title": "Document"
           },
+          "artifacts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Artifacts"
+          },
+          "steps": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Steps"
+          },
+          "conversion": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversion"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metrics"
+          },
+          "quality": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Quality"
+          },
+          "provenance": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Provenance"
+          },
           "error": {
             "anyOf": [
               {
@@ -598,90 +1438,49 @@
               }
             ],
             "title": "Error"
-          },
-          "file_id": {
-            "title": "File Id",
-            "type": "string"
-          },
-          "metrics": {
-            "additionalProperties": true,
-            "title": "Metrics",
-            "type": "object"
-          },
-          "provenance": {
-            "additionalProperties": true,
-            "title": "Provenance",
-            "type": "object"
-          },
-          "quality": {
-            "additionalProperties": true,
-            "title": "Quality",
-            "type": "object"
-          },
-          "status": {
-            "enum": [
-              "succeeded",
-              "partial",
-              "failed"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "steps": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "title": "Steps",
-            "type": "array"
-          },
-          "warnings": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Warnings",
-            "type": "array"
           }
         },
+        "type": "object",
         "required": [
           "status",
           "file_id"
         ],
         "title": "TaskResultEnvelope",
-        "type": "object"
+        "description": "Stable public result shape, independent of the executed Skill/Pipeline."
       },
       "TaskSubmitResponse": {
         "properties": {
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
           },
           "file_id": {
-            "title": "File Id",
-            "type": "string"
+            "type": "string",
+            "title": "File Id"
+          },
+          "status": {
+            "type": "string",
+            "const": "queued",
+            "title": "Status"
+          },
+          "queue_position": {
+            "type": "integer",
+            "title": "Queue Position"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
           },
           "links": {
             "additionalProperties": {
               "type": "string"
             },
-            "title": "Links",
-            "type": "object"
-          },
-          "queue_position": {
-            "title": "Queue Position",
-            "type": "integer"
-          },
-          "status": {
-            "const": "queued",
-            "title": "Status",
-            "type": "string"
-          },
-          "task_id": {
-            "title": "Task Id",
-            "type": "string"
+            "type": "object",
+            "title": "Links"
           }
         },
+        "type": "object",
         "required": [
           "task_id",
           "file_id",
@@ -690,18 +1489,10 @@
           "created_at",
           "links"
         ],
-        "title": "TaskSubmitResponse",
-        "type": "object"
+        "title": "TaskSubmitResponse"
       },
       "ValidationError": {
         "properties": {
-          "ctx": {
-            "title": "Context",
-            "type": "object"
-          },
-          "input": {
-            "title": "Input"
-          },
           "loc": {
             "items": {
               "anyOf": [
@@ -713,823 +1504,32 @@
                 }
               ]
             },
-            "title": "Location",
-            "type": "array"
+            "type": "array",
+            "title": "Location"
           },
           "msg": {
-            "title": "Message",
-            "type": "string"
+            "type": "string",
+            "title": "Message"
           },
           "type": {
-            "title": "Error Type",
-            "type": "string"
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
+        "type": "object",
         "required": [
           "loc",
           "msg",
           "type"
         ],
-        "title": "ValidationError",
-        "type": "object"
-      }
-    }
-  },
-  "info": {
-    "description": "基于 LangChain 和 Skill 的文档解析 Agent",
-    "title": "Parse Agent",
-    "version": "1.3.1"
-  },
-  "openapi": "3.1.0",
-  "paths": {
-    "/api/v1/capabilities": {
-      "get": {
-        "operationId": "capabilities_api_v1_capabilities_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CapabilitiesResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Capabilities",
-        "tags": [
-          "系统"
-        ]
-      }
-    },
-    "/api/v1/files": {
-      "post": {
-        "operationId": "upload_file_api_v1_files_post",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_upload_file_api_v1_files_post"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StoredFilePublic"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Upload File",
-        "tags": [
-          "文件"
-        ]
-      }
-    },
-    "/api/v1/files/{file_id}": {
-      "get": {
-        "operationId": "get_file_api_v1_files__file_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "file_id",
-            "required": true,
-            "schema": {
-              "title": "File Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/StoredFilePublic"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get File",
-        "tags": [
-          "文件"
-        ]
-      }
-    },
-    "/api/v1/files/{file_id}/content": {
-      "get": {
-        "operationId": "download_file_api_v1_files__file_id__content_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "file_id",
-            "required": true,
-            "schema": {
-              "title": "File Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Download File",
-        "tags": [
-          "文件"
-        ]
-      }
-    },
-    "/api/v1/metrics": {
-      "get": {
-        "operationId": "metrics_api_v1_metrics_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Metrics Api V1 Metrics Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Metrics",
-        "tags": [
-          "系统"
-        ]
-      }
-    },
-    "/api/v1/skills": {
-      "get": {
-        "operationId": "list_skills_api_v1_skills_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "additionalProperties": true,
-                    "type": "object"
-                  },
-                  "title": "Response List Skills Api V1 Skills Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "List Skills",
-        "tags": [
-          "Skill"
-        ]
-      }
-    },
-    "/api/v1/tasks": {
-      "get": {
-        "operationId": "list_tasks_api_v1_tasks_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "status",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "pattern": "^(queued|planning|running|cancelling|succeeded|partial|failed|cancelled|interrupted)$",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Status"
-            }
-          },
-          {
-            "in": "query",
-            "name": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 256,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Query"
-            }
-          },
-          {
-            "in": "query",
-            "name": "cursor",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 64,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cursor"
-            }
-          },
-          {
-            "in": "query",
-            "name": "sort",
-            "required": false,
-            "schema": {
-              "default": "created_desc",
-              "pattern": "^(created_desc|created_asc)$",
-              "title": "Sort",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 100,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "file_type",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 32,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "File Type"
-            }
-          },
-          {
-            "in": "query",
-            "name": "provider",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 128,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Provider"
-            }
-          },
-          {
-            "in": "query",
-            "name": "error_code",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "maxLength": 128,
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Error Code"
-            }
-          },
-          {
-            "in": "query",
-            "name": "created_after",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Created After"
-            }
-          },
-          {
-            "in": "query",
-            "name": "created_before",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "format": "date-time",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Created Before"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Tasks",
-        "tags": [
-          "任务"
-        ]
-      }
-    },
-    "/api/v1/tasks/parse": {
-      "post": {
-        "operationId": "submit_parse_task_api_v1_tasks_parse_post",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_submit_parse_task_api_v1_tasks_parse_post"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskSubmitResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Submit Parse Task",
-        "tags": [
-          "任务"
-        ]
-      }
-    },
-    "/api/v1/tasks/{task_id}": {
-      "delete": {
-        "operationId": "delete_task_api_v1_tasks__task_id__delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Delete Task",
-        "tags": [
-          "任务"
-        ]
-      },
-      "get": {
-        "operationId": "get_task_api_v1_tasks__task_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskRecord"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Task",
-        "tags": [
-          "任务"
-        ]
-      }
-    },
-    "/api/v1/tasks/{task_id}/artifacts": {
-      "get": {
-        "operationId": "list_artifacts_api_v1_tasks__task_id__artifacts_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ArtifactListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Artifacts",
-        "tags": [
-          "任务"
-        ]
-      }
-    },
-    "/api/v1/tasks/{task_id}/artifacts/{artifact_id}": {
-      "get": {
-        "operationId": "download_artifact_api_v1_tasks__task_id__artifacts__artifact_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "artifact_id",
-            "required": true,
-            "schema": {
-              "title": "Artifact Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Download Artifact",
-        "tags": [
-          "任务"
-        ]
-      }
-    },
-    "/api/v1/tasks/{task_id}/cancel": {
-      "post": {
-        "operationId": "cancel_task_api_v1_tasks__task_id__cancel_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskRecord"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Cancel Task",
-        "tags": [
-          "任务"
-        ]
-      }
-    },
-    "/api/v1/tasks/{task_id}/events": {
-      "get": {
-        "operationId": "list_task_events_api_v1_tasks__task_id__events_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "after",
-            "required": false,
-            "schema": {
-              "default": 0,
-              "minimum": 0,
-              "title": "After",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 100,
-              "maximum": 500,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskEventList"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Task Events",
-        "tags": [
-          "任务"
-        ]
-      }
-    },
-    "/api/v1/tasks/{task_id}/retry": {
-      "post": {
-        "operationId": "retry_task_api_v1_tasks__task_id__retry_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "task_id",
-            "required": true,
-            "schema": {
-              "title": "Task Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TaskSubmitResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Retry Task",
-        "tags": [
-          "任务"
-        ]
-      }
-    },
-    "/health": {
-      "get": {
-        "operationId": "health_health_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "title": "Response Health Health Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Health",
-        "tags": [
-          "系统"
-        ]
-      }
-    },
-    "/ready": {
-      "get": {
-        "description": "Check repositories, writable storage, registry and workers without running parsers or downloading models.",
-        "operationId": "ready_ready_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Ready Ready Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Ready",
-        "tags": [
-          "系统"
-        ]
+        "title": "ValidationError"
       }
     }
   }

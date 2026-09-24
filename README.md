@@ -287,6 +287,7 @@ The active roadmap and detailed release plans are maintained in:
 - Task records are persisted locally and recover queued work after restart; active work is marked interrupted and must be explicitly resubmitted.
 - Uploaded files and artifacts use local storage; object storage and distributed queues are not included.
 - Audio/video workflows prepare media only; they do not yet produce speech-to-text output.
+- Deleting a terminal task reclaims its artifacts and its upload unless another task still references that file. Orphaned directories left by an interrupted delete are reclaimed by the background janitor after `STORAGE_ORPHAN_MIN_AGE_SECONDS`.
 
 ## License
 

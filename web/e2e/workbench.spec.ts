@@ -1,5 +1,9 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test } from '@playwright/test'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures')
 
 test('real backend upload, deep link, artifact, retry and delete', async ({ page }) => {
   await page.goto('/')
@@ -27,4 +31,24 @@ test('real backend upload, deep link, artifact, retry and delete', async ({ page
   await expect(page.getByRole('heading', { level: 2, name: '解析完成' })).toBeVisible()
   await page.getByRole('button', { name: '删除' }).click()
   await expect(page.getByRole('heading', { level: 2, name: '任务中心' })).toBeVisible()
+})
+
+test('OCR proofing renders coordinates for a real enhanced-mode parse', async ({ page }) => {
+  // Uses local PaddleOCR against a generated high-contrast fixture so the real
+  // OCR path, page preview and coordinate overlay are exercised end to end.
+  test.slow()
+  await page.goto('/')
+  await page.getByRole('button', { name: /智能默认/ }).click()
+  await page.getByRole('option', { name: /增强解析/ }).click()
+  await page.locator('input[type=file]').setInputFiles(path.join(fixturesDir, 'ocr-sample.png'))
+  await page.getByRole('button', { name: /开始智能解析/ }).click()
+
+  await expect(page.getByRole('heading', { level: 2, name: '解析完成' })).toBeVisible({ timeout: 180_000 })
+  await page.getByRole('tab', { name: 'OCR 校对' }).click()
+  await expect(page.getByRole('heading', { name: '版面识别校对' })).toBeVisible()
+  // The overlay renders one focusable region per recognized text block, anchored
+  // to a stage whose aspect ratio comes from the OCR page dimensions.
+  await expect(page.locator('.ocr-image-stage')).toBeVisible()
+  await expect(page.locator('.ocr-overlay button').first()).toBeVisible()
+  await expect(page.getByText(/\d+ 个文本块/)).toBeVisible()
 })

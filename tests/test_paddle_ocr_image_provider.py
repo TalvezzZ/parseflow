@@ -47,6 +47,40 @@ async def test_paddle_ocr_image_provider_normalizes_local_result(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_paddle_ocr_image_provider_publishes_page_preview(tmp_path: Path) -> None:
+    """Preview metadata must describe the page without exposing a storage key."""
+
+    source = make_image(tmp_path)
+    artifact_dir = tmp_path / "artifacts" / "task-1" / "files"
+    artifact_dir.mkdir(parents=True)
+    context = ParseContext(file=FileInput(file_id="file-1", path=str(source), mime_type="image/png"))
+    context.metadata["artifact_dir"] = str(artifact_dir)
+
+    result = await PaddleOcrImageProvider(ocr_factory=FakePaddleOcr).parse(context)
+
+    assert result.status == "success"
+    page = result.document.pages[0]
+    assert (page.width, page.height) == (100, 80)
+    assert page.preview == {"filename": "ocr-page-0001.png", "content_type": "image/png"}
+    assert "relative_path" not in page.preview
+    assert (artifact_dir / "ocr-pages" / "ocr-page-0001.png").is_file()
+
+
+@pytest.mark.asyncio
+async def test_paddle_ocr_image_provider_omits_preview_without_artifact_dir(tmp_path: Path) -> None:
+    source = make_image(tmp_path)
+
+    result = await PaddleOcrImageProvider(ocr_factory=FakePaddleOcr).parse(
+        ParseContext(file=FileInput(file_id="file-1", path=str(source)))
+    )
+
+    assert result.status == "success"
+    assert result.document.pages[0].preview is None
+    # Dimensions are still recorded so the frontend can fall back to the source file.
+    assert (result.document.pages[0].width, result.document.pages[0].height) == (100, 80)
+
+
+@pytest.mark.asyncio
 async def test_paddle_ocr_image_provider_rejects_oversized_image(tmp_path: Path) -> None:
     source = make_image(tmp_path, size=(4, 4))
 

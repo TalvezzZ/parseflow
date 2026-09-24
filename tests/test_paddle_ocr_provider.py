@@ -36,6 +36,44 @@ async def test_paddle_ocr_provider_normalizes_local_result(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_paddle_ocr_provider_publishes_per_page_previews(tmp_path: Path) -> None:
+    """Scanned PDFs are document_type='pdf' but must still expose per-page proofing data."""
+
+    from PIL import Image
+
+    source = tmp_path / "scanned.pdf"
+    source.write_bytes(b"%PDF-1.4\n")
+    rendered = tmp_path / "rendered"
+    rendered.mkdir()
+    page_paths = []
+    for number in (1, 2):
+        page = rendered / f"page-{number}.png"
+        Image.new("RGB", (120 + number, 90 + number), "white").save(page)
+        page_paths.append((number, page))
+
+    def renderer(_: Path, __: int, ___: float, ____: int):
+        return page_paths
+
+    artifact_dir = tmp_path / "artifacts" / "task-1" / "files"
+    artifact_dir.mkdir(parents=True)
+    context = ParseContext(file=FileInput(file_id="file-1", path=str(source)))
+    context.metadata["artifact_dir"] = str(artifact_dir)
+
+    result = await PaddleOcrPdfProvider(ocr_factory=FakePaddleOcr, renderer=renderer).parse(context)
+
+    assert result.status == "success"
+    assert result.document.document_type == "pdf"
+    assert [page.page_number for page in result.document.pages] == [1, 2]
+    assert [(page.width, page.height) for page in result.document.pages] == [(121, 91), (122, 92)]
+    assert result.document.pages[0].preview == {"filename": "ocr-page-0001.png", "content_type": "image/png"}
+    assert result.document.pages[1].preview == {"filename": "ocr-page-0002.png", "content_type": "image/png"}
+    for page in result.document.pages:
+        assert "relative_path" not in page.preview
+    assert (artifact_dir / "ocr-pages" / "ocr-page-0001.png").is_file()
+    assert (artifact_dir / "ocr-pages" / "ocr-page-0002.png").is_file()
+
+
+@pytest.mark.asyncio
 async def test_paddle_ocr_provider_enforces_renderer_limits(tmp_path: Path) -> None:
     source = tmp_path / "scanned.pdf"
     source.write_bytes(b"%PDF-1.4\n")

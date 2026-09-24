@@ -8,7 +8,12 @@ type Json = Record<string, unknown>
 type TaskStatus = 'queued' | 'planning' | 'running' | 'cancelling' | 'succeeded' | 'partial' | 'failed' | 'cancelled' | 'interrupted'
 type Artifact = { artifact_id: string; filename: string; content_type?: string; size_bytes?: number; kind?: string; download_url?: string }
 type TaskResult = { status: 'succeeded' | 'partial' | 'failed'; document?: Json; artifacts: Artifact[]; steps: Json[]; conversion?: Json; warnings: string[]; metrics: Json; quality?: Json; provenance?: Json; error?: Json }
-type ParseMode = 'auto' | 'standard' | 'enhanced'
+export type ParseMode = 'auto' | 'standard' | 'enhanced'
+const parseModeOptions: { value: ParseMode; label: string; hint: string; glyph: string }[] = [
+  { value: 'auto', label: '智能默认', hint: '自动选择最佳路径', glyph: '⌁' },
+  { value: 'standard', label: '标准解析', hint: '原生快速提取', glyph: '≡' },
+  { value: 'enhanced', label: '增强解析', hint: 'OCR 与复杂版面优先', glyph: '✦' },
+]
 type Task = { task_id: string; file_id: string; filename?: string; content_type?: string; status: TaskStatus; data_id?: string; goal?: string; parse_mode?: ParseMode; retry_of?: string; created_at: string; updated_at?: string; started_at?: string; finished_at?: string; duration_ms?: number; error?: Json; plan?: Json; result?: TaskResult; warnings?: string[] }
 type TaskEvent = { sequence: number; type: string; at: string; step?: string; message?: string; details: Json }
 type SubmittedTask = { task_id: string; file_id: string; status: 'queued'; created_at: string }
@@ -161,7 +166,7 @@ export function App() {
   const loadMore = async () => { if (!nextCursor) return; const generation = listRequestRef.current; try { const payload = await api<{ items: Task[]; next_cursor?: string }>(taskQuery(filters, nextCursor)); if (generation === listRequestRef.current) { setRecent((items) => [...items, ...payload.items.filter((item) => !items.some((existing) => existing.task_id === item.task_id))]); setNextCursor(payload.next_cursor) } } catch (err) { if (generation === listRequestRef.current) { setError(errorMessage(err)); setStale(true) } } }
 
   return <main className="app-shell">
-    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · 1.3.1</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className={`service ${stale ? 'stale' : ''}`} role="status"><i /> {stale ? '连接中断 · 数据可能已过期' : '服务就绪'}</span></header>
+    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · 1.4.0</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className={`service ${stale ? 'stale' : ''}`} role="status"><i /> {stale ? '连接中断 · 数据可能已过期' : '服务就绪'}</span></header>
     <section className={`workspace-grid ${task ? 'task-active' : ''}`}>
       <aside className="upload-panel"><h2>开始解析</h2><form onSubmit={submit}>
         <div className="dropzone" role="button" tabIndex={0} aria-label="选择要解析的文件" onDrop={onDrop} onDragOver={(event) => event.preventDefault()} onClick={openFilePicker} onKeyDown={onDropzoneKeyDown}>
@@ -169,7 +174,8 @@ export function App() {
           <span className="upload-icon">↑</span><strong>{file ? file.name : '拖拽文件到这里'}</strong><small>{file ? `${file.type || '未知类型'} · ${fileSize(file.size)}` : capabilities ? `PDF · Office · 图片 · 文本 · 音视频等 ${capabilities.allowed_suffixes.length} 种格式` : '正在读取服务端上传能力…'}</small>{!file && <em className="dropzone-browse">点击浏览文件 <i>·</i> 最大 {capabilities ? fileSize(capabilities.max_upload_bytes) : '—'}</em>}
         </div>
         {file && <div className="selected-file"><span><strong>已选择文件</strong><small>{file.name}</small></span><button type="button" onClick={clearFile} aria-label="移除已选择的文件">移除</button></div>}
-        <section className="parse-controls" aria-labelledby="parse-controls-title"><div className="parse-controls-heading"><h3 id="parse-controls-title">解析方式</h3><span>可选</span></div><div className="parse-selector"><button className="parse-selector-trigger" type="button" aria-haspopup="listbox" aria-expanded={parseMenuOpen} onClick={() => setParseMenuOpen((open) => !open)} onKeyDown={(event) => { if (event.key === 'Escape') setParseMenuOpen(false) }}><span className={`parse-mode-glyph ${parseMode}`} aria-hidden="true">{parseMode === 'enhanced' ? '✦' : parseMode === 'standard' ? '≡' : '⌁'}</span><span><strong>{parseMode === 'enhanced' ? '增强解析' : parseMode === 'standard' ? '标准解析' : '智能默认'}</strong><small>{parseMode === 'enhanced' ? 'OCR 与复杂版面优先' : parseMode === 'standard' ? '原生快速提取' : '自动选择最佳路径'}</small></span><i aria-hidden="true" /></button>{parseMenuOpen && <div className="parse-selector-menu" role="listbox" aria-label="解析模式"><button type="button" role="option" aria-selected={parseMode === 'auto'} onClick={() => { setParseMode('auto'); setParseMenuOpen(false) }}><span className="parse-mode-glyph auto" aria-hidden="true">⌁</span><span><strong>智能默认</strong><small>自动选择最佳路径</small></span>{parseMode === 'auto' && <b>✓</b>}</button><button type="button" role="option" aria-selected={parseMode === 'standard'} onClick={() => { setParseMode('standard'); setParseMenuOpen(false) }}><span className="parse-mode-glyph standard" aria-hidden="true">≡</span><span><strong>标准解析</strong><small>原生快速提取</small></span>{parseMode === 'standard' && <b>✓</b>}</button><button type="button" role="option" aria-selected={parseMode === 'enhanced'} disabled={capabilities?.parse_modes ? !capabilities.parse_modes.includes('enhanced') : false} onClick={() => { setParseMode('enhanced'); setParseMenuOpen(false) }}><span className="parse-mode-glyph enhanced" aria-hidden="true">✦</span><span><strong>增强解析</strong><small>OCR 与复杂版面优先</small></span>{parseMode === 'enhanced' && <b>✓</b>}</button></div>}</div></section><details className="upload-options"><summary>更多设置与支持格式</summary><SupportedFormats /><label>解析目标 <span>可选</span><textarea value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="例如：提取表格并输出 Markdown" rows={3} /></label></details>
+        <ParseModeSelector value={parseMode} onChange={setParseMode} open={parseMenuOpen} setOpen={setParseMenuOpen} enhancedAvailable={capabilities?.parse_modes ? capabilities.parse_modes.includes('enhanced') : true} />
+        <details className="upload-options"><summary>更多设置与支持格式</summary><SupportedFormats /><label>解析目标 <span>可选</span><textarea value={goal} onChange={(event) => setGoal(event.target.value)} placeholder="例如：提取表格并输出 Markdown" rows={3} /></label></details>
         {error && <p className="error" role="alert" tabIndex={-1} ref={errorRef}>{error}</p>}
         {submitting && <div className="upload-progress" role="status" aria-live="polite"><progress max="100" value={uploadProgress} /><span>上传 {uploadProgress}%</span><button type="button" onClick={() => uploadRef.current?.abort()}>取消上传</button></div>}
         <button className="primary" disabled={submitting}>{submitting ? '正在创建任务…' : '开始智能解析'} <span>→</span></button>
@@ -178,6 +184,59 @@ export function App() {
       <section className="content-panel">{task ? <TaskView task={task} headingRef={headingRef} events={events} document={document} fileId={fileId} plans={plans} tables={tables} representations={representations} artifacts={artifacts} activeTab={activeTab} setActiveTab={setActiveTab} onCancel={cancelTask} onRetry={retryTask} onDelete={deleteTask} backToList={() => { setTask(null); setActiveTab('overview'); setError(''); window.history.pushState({}, '', filterUrl(filters)) }} /> : <TaskCenter recent={recent} open={openTask} filters={filters} setFilters={setFilters} nextCursor={nextCursor} loadMore={loadMore} />}</section>
     </section>
   </main>
+}
+
+export function ParseModeSelector({ value, onChange, open, setOpen, enhancedAvailable }: { value: ParseMode; onChange: (mode: ParseMode) => void; open: boolean; setOpen: (open: boolean) => void; enhancedAvailable: boolean }) {
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const pendingFocusRef = useRef<number | null>(null)
+  const current = parseModeOptions.find((option) => option.value === value) || parseModeOptions[0]
+  const close = (restoreFocus = true) => { setOpen(false); if (restoreFocus) triggerRef.current?.focus() }
+  const select = (mode: ParseMode) => { onChange(mode); close() }
+  // Only enabled options participate in keyboard traversal.
+  const focusableOptions = () => (optionRefs.current.filter((node): node is HTMLButtonElement => node !== null && !node.disabled))
+  const focusOption = (index: number) => { const options = focusableOptions(); if (!options.length) return; options[(index + options.length) % options.length]?.focus() }
+  const currentIndex = () => { const options = focusableOptions(); const found = options.findIndex((node) => node.getAttribute('data-mode') === value); return found < 0 ? 0 : found }
+  const openAndFocus = (index: number) => { pendingFocusRef.current = index; setOpen(true) }
+  // Focus the requested option once the listbox has actually rendered.
+  useEffect(() => { if (open && pendingFocusRef.current !== null) { focusOption(pendingFocusRef.current); pendingFocusRef.current = null } }, [open])
+  // Keyboard model for aria-haspopup="listbox": open with ArrowDown/ArrowUp/Enter/Space,
+  // move with arrows and Home/End, close with Escape or Tab, and always restore focus
+  // to the trigger so keyboard users are not dropped into the document.
+  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Escape' && open) { event.preventDefault(); close(); return }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      openAndFocus(currentIndex())
+    }
+  }
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') { event.preventDefault(); close(); return }
+    if (event.key === 'Tab') { close(); return }
+    const options = focusableOptions()
+    const index = options.indexOf(document.activeElement as HTMLButtonElement)
+    if (event.key === 'ArrowDown') { event.preventDefault(); focusOption(index + 1) }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); focusOption(index - 1) }
+    else if (event.key === 'Home') { event.preventDefault(); focusOption(0) }
+    else if (event.key === 'End') { event.preventDefault(); focusOption(options.length - 1) }
+  }
+  return <section className="parse-controls" aria-labelledby="parse-controls-title">
+    <div className="parse-controls-heading"><h3 id="parse-controls-title">解析方式</h3><span>可选</span></div>
+    <div className="parse-selector">
+      <button ref={triggerRef} className="parse-selector-trigger" type="button" aria-haspopup="listbox" aria-expanded={open} aria-controls="parse-mode-menu" onClick={() => (open ? close(false) : setOpen(true))} onKeyDown={onTriggerKeyDown}>
+        <span className={`parse-mode-glyph ${value}`} aria-hidden="true">{current.glyph}</span>
+        <span><strong>{current.label}</strong><small>{current.hint}</small></span>
+        <i aria-hidden="true" />
+      </button>
+      {open && <div id="parse-mode-menu" className="parse-selector-menu" role="listbox" aria-label="解析模式" onKeyDown={onMenuKeyDown}>
+        {parseModeOptions.map((option, index) => { const disabled = option.value === 'enhanced' && !enhancedAvailable; return <button key={option.value} ref={(node) => { optionRefs.current[index] = node }} data-mode={option.value} type="button" role="option" tabIndex={-1} disabled={disabled} aria-selected={value === option.value} onClick={() => select(option.value)}>
+          <span className={`parse-mode-glyph ${option.value}`} aria-hidden="true">{option.glyph}</span>
+          <span><strong>{option.label}</strong><small>{option.hint}</small></span>
+          {value === option.value && <b>✓</b>}
+        </button> })}
+      </div>}
+    </div>
+  </section>
 }
 
 function SupportedFormats() {
@@ -205,7 +264,7 @@ export function TaskView({ task, headingRef, events, document, fileId, plans, ta
     ...(representations.plain_text ? [['text', '正文']] : []),
     ...(tables.length ? [['tables', `表格 ${tables.length}`]] : []),
     ...(representations.markdown ? [['markdown', 'Markdown']] : []),
-    ...(hasOcrOverlay(document) ? [['ocr', 'OCR 校对']] : []),
+    ...(hasOcrOverlay(document, artifacts) ? [['ocr', 'OCR 校对']] : []),
     ...(representations.html ? [['html', 'HTML 预览']] : []),
     ...(document ? [['json', '结构化 JSON']] : []),
     ...(artifacts.length ? [['artifacts', `产物 ${artifacts.length}`]] : []),
@@ -251,25 +310,59 @@ function ResultTab({ tab, task, document, fileId: _fileId, tables, representatio
  if (tab === 'overview') { const quality = task.result?.quality || {}; const provenance = task.result?.provenance || {}; const providers = Array.isArray(provenance.provider_chain) ? provenance.provider_chain.join(' → ') : '未知'; return <div className="overview"><Stat label="文档类型" value={String(document?.document_type || '等待结果')} /><Stat label="输入分类" value={String(quality.input_classification || '未知')} /><Stat label="表格" value={String(quality.tables ?? tables.length)} /><Stat label="图片" value={String(quality.images ?? ((document?.images as Json[] | undefined)?.length || 0))} /><Stat label="Provider 链路" value={providers} /><Stat label="截断" value={quality.truncated ? '是' : '否'} /><section><h3>解析摘要</h3><p>{plainText.slice(0, 600)}</p></section></div> }
  if (tab === 'text') return <><CopyButton text={plainText} /><pre className="text-preview">{plainText}</pre></>
  if (tab === 'markdown') return <><CopyButton text={markdown} /><pre className="text-preview markdown">{markdown}</pre></>
- if (tab === 'ocr') return <OcrProofing document={document} taskId={task.task_id} />
+ if (tab === 'ocr') return <OcrProofing document={document} taskId={task.task_id} artifacts={artifacts} />
  if (tab === 'html') return representations.html ? <iframe className="html-preview" title="HTML 内容预览" sandbox="" srcDoc={String(representations.html)} /> : <NoContent text="当前结果没有可用的 HTML 表示。" />
  if (tab === 'tables') return <div className="tables">{tables.length ? tables.map((table, index) => <Table key={index} table={table} />) : <NoContent text="当前结果没有可预览的表格。" />}</div>
  if (tab === 'artifacts') return <div className="artifacts">{artifacts.length ? artifacts.map((artifact, i) => <ArtifactItem artifact={artifact} taskId={task.task_id} index={i} key={artifact.artifact_id} />) : <NoContent text="当前结果没有可下载的 artifact。" />}</div>
  if (tab === 'details') return <JsonView text={details} label="执行详情" />
  return <JsonView text={structured} label="结构化 JSON" />
 }
-function hasOcrOverlay(document?: Json) { return Boolean(document?.document_type === 'image' && Array.isArray(document.blocks) && document.blocks.some((block) => { const item = block as Json; return Array.isArray(item.bbox) && item.bbox.length >= 4 })) }
-export function OcrProofing({ document, taskId }: { document?: Json; taskId: string }) {
+export type OcrPage = { pageNumber: number; blocks: Json[]; width: number; height: number; imageUrl: string }
+export function ocrBlocks(value: unknown): Json[] { return Array.isArray(value) ? value.filter((block): block is Json => Boolean(block) && typeof block === 'object' && Array.isArray((block as Json).bbox) && ((block as Json).bbox as unknown[]).length >= 4) : [] }
+/**
+ * Build proofing pages from an OCR result. Scanned PDFs carry per-page dimensions
+ * and a preview artifact; standalone images carry them on the document itself.
+ */
+export function ocrPages(document?: Json, artifacts: Artifact[] = []): OcrPage[] {
+  const source = document?.source_file as Json | undefined
+  const sourceFileId = source?.file_id ? String(source.file_id) : ''
+  const directUrl = sourceFileId ? `/api/v1/files/${encodeURIComponent(sourceFileId)}/content` : ''
+  const metadata = (document?.metadata as Json | undefined) || {}
+  const artifactUrl = (filename: unknown) => { const match = artifacts.find((item) => item.filename === String(filename || '')); return match?.download_url ? String(match.download_url) : '' }
+  const rawPages = Array.isArray(document?.pages) ? document?.pages as Json[] : []
+  const pages = rawPages.map((page, index) => {
+    const preview = page.preview as Json | undefined
+    return { pageNumber: Number(page.page_number || index + 1), blocks: ocrBlocks(page.blocks),
+             width: Number(page.width || metadata.width || 0), height: Number(page.height || metadata.height || 0),
+             imageUrl: artifactUrl(preview?.filename) || directUrl }
+  }).filter((page) => page.blocks.length)
+  if (pages.length) return pages
+  const fallback = ocrBlocks(document?.blocks)
+  return fallback.length ? [{ pageNumber: 1, blocks: fallback, width: Number(metadata.width || 0), height: Number(metadata.height || 0), imageUrl: directUrl }] : []
+}
+function hasOcrOverlay(document?: Json, artifacts: Artifact[] = []) { return ocrPages(document, artifacts).length > 0 }
+export function OcrProofing({ document, taskId, artifacts = [] }: { document?: Json; taskId: string; artifacts?: Artifact[] }) {
+ const pages = ocrPages(document, artifacts)
+ const [pageIndex, setPageIndex] = useState(0)
  const [visible, setVisible] = useState(true); const [selected, setSelected] = useState<number | null>(null)
- const blocks = Array.isArray(document?.blocks) ? document.blocks.filter((block): block is Json => Boolean(block) && typeof block === 'object' && Array.isArray(block.bbox) && (block.bbox as unknown[]).length >= 4) : []
+ useEffect(() => { setPageIndex(0); setSelected(null) }, [document])
+ if (!pages.length) return <NoContent text="当前 OCR 结果缺少原图或坐标信息，无法生成校对视图。" />
+ const current = Math.min(pageIndex, pages.length - 1)
+ const page = pages[current]
+ const blocks = page.blocks
  const source = document?.source_file as Json | undefined
- const imageUrl = source?.file_id ? `/api/v1/files/${encodeURIComponent(String(source.file_id))}/content` : ''
- const dimensions = document?.metadata as Json | undefined
- const width = Number(dimensions?.width || 0); const height = Number(dimensions?.height || 0)
- if (!imageUrl || !width || !height) return <NoContent text="当前 OCR 结果缺少原图或坐标信息，无法生成校对视图。" />
+ const imageUrl = page.imageUrl
+ const width = page.width; const height = page.height
+ const sourceLabel = pages.length > 1 ? `第 ${page.pageNumber} 页` : String(source?.filename || '原图')
+ const missingPreview = !imageUrl
+ const stage = !width || !height
  const rect = (bbox: unknown) => { const values = (bbox as unknown[]).map(Number); const xs = values.filter((_, index) => index % 2 === 0); const ys = values.filter((_, index) => index % 2 === 1); const left = Math.min(...xs); const top = Math.min(...ys); const boxHeight = Math.max(...ys) - top; return { left: `${left / width * 100}%`, top: `${top / height * 100}%`, width: `${(Math.max(...xs) - left) / width * 100}%`, height: `${boxHeight / height * 100}%`, '--ocr-font-ratio': `${Math.max(0.55, Math.min(0.94, boxHeight / 42))}` } as CSSProperties }
  const selectBlock = (index: number) => setSelected(index)
- return <section className="ocr-proofing"><header><div><p>OCR PROOFING</p><h3>版面识别校对</h3><span>{blocks.length} 个文本块 · 左侧原图与右侧重建版面共用同一组 OCR 坐标</span></div><button type="button" onClick={() => setVisible((value) => !value)}>{visible ? '隐藏标注' : '显示标注'}</button></header><div className="ocr-comparison"><section className="ocr-pane"><div className="ocr-pane-heading"><strong>原始图像</strong><span>OCR 框选</span></div><div className="ocr-canvas"><div className="ocr-image-stage" style={{ aspectRatio: `${width} / ${height}` }}><img src={imageUrl} alt={`${String(source?.filename || '原图')} OCR 校对`} />{visible && <div className="ocr-overlay" aria-label="OCR 文本坐标标注">{blocks.map((block, index) => <button type="button" key={index} className={selected === index ? 'selected' : ''} style={rect(block.bbox)} onClick={() => selectBlock(index)} aria-label={`文本块 ${index + 1}：${String(block.text || '')}`}><span>{index + 1}</span></button>)}</div>}</div></div></section><section className="ocr-pane"><div className="ocr-pane-heading"><strong>识别版面</strong><span>可视化重建</span></div><div className="ocr-layout-canvas"><OcrLayoutCanvas blocks={blocks} width={width} height={height} selected={selected} onSelect={selectBlock} /></div></section></div>{selected !== null && <aside className="ocr-selection"><span>文本块 {selected + 1}</span><strong>{String(blocks[selected]?.text || '')}</strong><small>置信度：{Number((blocks[selected]?.metadata as Json | undefined)?.confidence || 0).toFixed(3)}</small></aside>}</section>
+ const changePage = (index: number) => { setPageIndex(index); setSelected(null) }
+ return <section className="ocr-proofing"><header><div><p>OCR PROOFING</p><h3>版面识别校对</h3><span>{blocks.length} 个文本块 · 左侧原图与右侧重建版面共用同一组 OCR 坐标</span></div><button type="button" onClick={() => setVisible((value) => !value)}>{visible ? '隐藏标注' : '显示标注'}</button></header>
+  {pages.length > 1 && <nav className="ocr-pager" aria-label="OCR 页面切换">{pages.map((item, index) => <button type="button" key={item.pageNumber} className={index === current ? 'active' : ''} aria-current={index === current ? 'page' : undefined} onClick={() => changePage(index)}>第 {item.pageNumber} 页</button>)}</nav>}
+  <div className="ocr-comparison"><section className="ocr-pane"><div className="ocr-pane-heading"><strong>原始图像</strong><span>OCR 框选</span></div><div className="ocr-canvas">{missingPreview ? <NoContent text="该页没有可用的预览图，仅显示识别版面。" /> : stage ? <NoContent text="该页缺少尺寸信息，无法对齐坐标。" /> : <div className="ocr-image-stage" style={{ aspectRatio: `${width} / ${height}` }}><img src={imageUrl} alt={`${sourceLabel} OCR 校对`} />{visible && <div className="ocr-overlay" aria-label="OCR 文本坐标标注">{blocks.map((block, index) => <button type="button" key={index} className={selected === index ? 'selected' : ''} style={rect(block.bbox)} onClick={() => selectBlock(index)} aria-label={`文本块 ${index + 1}：${String(block.text || '')}`}><span>{index + 1}</span></button>)}</div>}</div>}</div></section><section className="ocr-pane"><div className="ocr-pane-heading"><strong>识别版面</strong><span>可视化重建</span></div><div className="ocr-layout-canvas">{stage ? <NoContent text="该页缺少尺寸信息，无法重建版面。" /> : <OcrLayoutCanvas blocks={blocks} width={width} height={height} selected={selected} onSelect={selectBlock} />}</div></section></div>
+  {selected !== null && <aside className="ocr-selection"><span>文本块 {selected + 1}</span><strong>{String(blocks[selected]?.text || '')}</strong><small>置信度：{Number((blocks[selected]?.metadata as Json | undefined)?.confidence || 0).toFixed(3)}</small></aside>}</section>
 }
 function OcrLayoutCanvas({ blocks, width, height, selected, onSelect }: { blocks: Json[]; width: number; height: number; selected: number | null; onSelect: (index: number) => void }) {
  const canvasRef = useRef<HTMLCanvasElement>(null)
