@@ -1,7 +1,7 @@
 import { createRef } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { Table, TaskCenter, TaskView } from './main'
+import { OcrProofing, Table, TaskCenter, TaskView } from './main'
 
 const task = { task_id: `task_${'1'.repeat(32)}`, file_id: `file_${'2'.repeat(32)}`, status: 'interrupted', created_at: new Date().toISOString(), result: { status: 'failed', artifacts: [], steps: [], warnings: [], metrics: {} } }
 
@@ -43,6 +43,17 @@ describe('TaskCenter', () => {
     fireEvent.change(screen.getByLabelText('状态'), { target: { value: 'interrupted' } })
     expect(setFilters).toHaveBeenCalledWith({ ...filters, status: 'interrupted' })
     fireEvent.click(screen.getByRole('button', { name: '加载更多' })); expect(loadMore).toHaveBeenCalled()
+  })
+})
+
+describe('OCR proofing', () => {
+  it('anchors coordinate overlays to the source image stage', () => {
+    const document = { document_type: 'image', source_file: { file_id: `file_${'4'.repeat(32)}`, filename: 'label.png' }, metadata: { width: 1000, height: 500 }, blocks: [{ text: 'BODUO', bbox: [100, 50, 500, 150], metadata: { confidence: .99 } }] }
+    render(<OcrProofing document={document as any} taskId={`task_${'5'.repeat(32)}`} />)
+    const stage = screen.getByRole('img', { name: 'label.png OCR 校对' }).parentElement
+    expect(stage).toHaveClass('ocr-image-stage')
+    expect(stage).toHaveStyle({ aspectRatio: '1000 / 500' })
+    expect(screen.getByRole('button', { name: '文本块 1：BODUO' })).toHaveStyle({ left: '10%', top: '10%', width: '40%', height: '20%' })
   })
 })
 
