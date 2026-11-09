@@ -12,7 +12,7 @@ RUN npm run build
 # One production image: Nginx serves the workbench and proxies to a local,
 # single-worker FastAPI process. LibreOffice, FFmpeg, and CPU PaddleOCR are
 # included so every advertised local parsing capability is available.
-FROM --platform=linux/amd64 python:3.12-slim-bookworm AS full
+FROM --platform=linux/amd64 python:3.15-slim-bookworm AS full
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
