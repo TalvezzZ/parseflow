@@ -507,6 +507,85 @@
         }
       }
     },
+    "/api/v1/tasks/{task_id}/sheets/{sheet_id}/rows": {
+      "get": {
+        "tags": [
+          "任务"
+        ],
+        "summary": "Get Excel Sheet Rows",
+        "operationId": "get_excel_sheet_rows_api_v1_tasks__task_id__sheets__sheet_id__rows_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "sheet_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 2147483647,
+              "minimum": 0,
+              "title": "Sheet Id"
+            }
+          },
+          {
+            "name": "after_row",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1048576,
+              "minimum": 0,
+              "default": 0,
+              "title": "After Row"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Excel Sheet Rows Api V1 Tasks  Task Id  Sheets  Sheet Id  Rows Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/tasks/{task_id}/events": {
       "get": {
         "tags": [

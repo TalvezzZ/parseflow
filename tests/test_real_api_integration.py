@@ -5,7 +5,7 @@ import asyncio
 from pathlib import Path
 import httpx
 import pytest
-from app.main import app
+from app.main import app, registry
 
 
 def write_text_pdf(path: Path, text: str) -> None:
@@ -39,6 +39,47 @@ async def test_real_pdf_parse_upload_task(tmp_path: Path) -> None:
     task = await parse_upload(source, "application/pdf")
     assert task["status"] == "succeeded"
     assert "Real PDF integration test" in task["result"]["document"]["representations"]["plain_text"]
+
+
+@pytest.mark.asyncio
+async def test_real_pdf_image_parse_publishes_artifact(monkeypatch, tmp_path: Path) -> None:
+    import io
+    import sys
+    from types import SimpleNamespace
+
+    import pymupdf
+    from PIL import Image
+
+    image_stream = io.BytesIO()
+    Image.new("RGB", (16, 12), (30, 120, 220)).save(image_stream, format="PNG")
+    source = tmp_path / "illustrated.pdf"
+    pdf = pymupdf.open()
+    page = pdf.new_page(width=300, height=300)
+    page.insert_text((20, 30), "Native image integration test")
+    page.insert_image(pymupdf.Rect(40, 60, 140, 120), stream=image_stream.getvalue())
+    pdf.save(source)
+    pdf.close()
+
+    fake_inspector = SimpleNamespace(
+        detect_pdf=lambda _path: SimpleNamespace(pdf_type="text_based", confidence=0.99, ocr_recommended=False,
+                                                pages_needing_ocr=[], ocr_reasons_by_page=[]),
+        process_pdf=lambda _path: SimpleNamespace(markdown="Native image integration test", page_count=1),
+        extract_pages_markdown=lambda _path: SimpleNamespace(
+            pages=[SimpleNamespace(page=0, markdown="Native image integration test")]
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "pdf_inspector", fake_inspector)
+    monkeypatch.setattr(registry.get("pdf.parse"), "normal_provider", "pdf.normal.pymupdf")
+
+    task = await parse_upload(source, "application/pdf")
+    assert task["status"] == "succeeded"
+    result = task["result"]
+    images = result["document"]["images"]
+    assert len(images) == 1
+    assert images[0]["occurrences"][0]["page_number"] == 1
+    image_artifacts = [item for item in result["artifacts"] if str(item.get("content_type", "")).startswith("image/")]
+    assert len(image_artifacts) == 1
+    assert image_artifacts[0]["download_url"].endswith(image_artifacts[0]["artifact_id"])
 
 
 @pytest.mark.asyncio

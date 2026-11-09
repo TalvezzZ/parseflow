@@ -5,8 +5,9 @@ services:
     build:
       context: .
       target: full
-    image: parseflow:1.4.0
+    image: ${PARSEFLOW_IMAGE:-parseflow:1.4.0}
     restart: unless-stopped
+    stop_grace_period: ${PARSEFLOW_STOP_GRACE_PERIOD:-45s}
     read_only: true
     cap_drop:
       - ALL

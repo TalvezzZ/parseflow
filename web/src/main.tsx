@@ -18,10 +18,31 @@ type Task = { task_id: string; file_id: string; filename?: string; content_type?
 type TaskEvent = { sequence: number; type: string; at: string; step?: string; message?: string; details: Json }
 type SubmittedTask = { task_id: string; file_id: string; status: 'queued'; created_at: string }
 type Capabilities = { allowed_suffixes: string[]; max_upload_bytes: number; max_result_bytes: number; task_filters: string[]; parse_modes?: ParseMode[] }
+type SpreadsheetCell = { coordinate: string; row: number; column: number; value: unknown; formula?: string | null }
+type SpreadsheetRow = { row: number; cells: SpreadsheetCell[] }
+type SpreadsheetPage = { sheet_id: number; sheet_name: string; rows: SpreadsheetRow[]; next_after_row: number | null; preview_truncated?: boolean }
+type SpreadsheetColumn = { column?: number; label: string }
+const spreadsheetPageSize = 100
+function spreadsheetColumnName(index: number) { let label = ''; for (let n = index; n > 0; n = Math.floor((n - 1) / 26)) label = String.fromCharCode(65 + (n - 1) % 26) + label; return label }
+function spreadsheetColumns(rows: SpreadsheetRow[]): SpreadsheetColumn[] {
+  const occupied = [...new Set(rows.flatMap((row) => row.cells.map((cell) => cell.column).filter((column) => Number.isSafeInteger(column) && column > 0)))].sort((a, b) => a - b)
+  const columns: SpreadsheetColumn[] = []
+  let previous = 0
+  for (const column of occupied) {
+    const missing = column - previous - 1
+    if (missing <= 12) for (let gap = previous + 1; gap < column; gap++) columns.push({ column: gap, label: spreadsheetColumnName(gap) })
+    else columns.push({ label: `${spreadsheetColumnName(previous + 1)}–${spreadsheetColumnName(column - 1)}（空列）` })
+    columns.push({ column, label: spreadsheetColumnName(column) })
+    previous = column
+  }
+  return columns
+}
 type Filters = { status: string; fileType: string; provider: string; errorCode: string; query: string; createdAfter: string; createdBefore: string }
 const emptyFilters: Filters = { status: '', fileType: '', provider: '', errorCode: '', query: '', createdAfter: '', createdBefore: '' }
 const terminal = new Set<TaskStatus>(['succeeded', 'partial', 'failed', 'cancelled', 'interrupted'])
 
+const stepLabels: Record<string, string> = { succeeded: '成功', failed: '失败', running: '执行中', pending: '待执行', skipped: '已跳过', cancelled: '已取消' }
+const stepLabel = (status: string) => stepLabels[status] || status
 const statusLabels: Record<TaskStatus, string> = { queued: '等待处理', planning: '正在制定解析方案', running: '正在执行解析', cancelling: '正在取消', succeeded: '解析完成', partial: '部分完成', failed: '解析失败', cancelled: '已取消', interrupted: '服务中断' }
 
 function upload(form: FormData, progress: (value: number) => void, register: (xhr: XMLHttpRequest) => void): Promise<SubmittedTask> {
@@ -96,7 +117,8 @@ export function App() {
   useEffect(() => {
     api<Capabilities>('/api/v1/capabilities').then(setCapabilities).catch(() => undefined)
     const match = window.location.pathname.match(/^\/tasks\/(task_[0-9a-f]{32})$/)
-    if (match) api<Task>(`/api/v1/tasks/${match[1]}`).then((item) => { setTask(item); setTimeout(() => headingRef.current?.focus(), 0) }).catch((err) => setError(taskLoadError(err)))
+    const tabParam = new URLSearchParams(window.location.search).get('tab')
+    if (match) api<Task>(`/api/v1/tasks/${match[1]}`).then((item) => { setTask(item); if (tabParam) setActiveTab(tabParam as never); setTimeout(() => headingRef.current?.focus({ preventScroll: true }), 0) }).catch((err) => setError(taskLoadError(err)))
   }, [])
 
   useEffect(() => { const pop = () => { const match = window.location.pathname.match(/^\/tasks\/(task_[0-9a-f]{32})$/); if (!match) { setTask(null); return } api<Task>(`/api/v1/tasks/${match[1]}`).then(setTask).catch((err) => setError(taskLoadError(err))) }; window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop) }, [])
@@ -110,7 +132,7 @@ export function App() {
     return () => window.clearTimeout(id)
   }, [filters])
 
-  useEffect(() => { if (task) headingRef.current?.focus() }, [task?.task_id])
+  useEffect(() => { if (task) headingRef.current?.focus({ preventScroll: true }) }, [task?.task_id])
 
   useEffect(() => {
     if (!task || terminal.has(task.status)) return
@@ -135,10 +157,10 @@ export function App() {
     return () => { stopped = true; window.clearTimeout(timer) }
   }, [task?.task_id, task?.status])
 
-  const openTask = (item: Task) => { setTask(item); setActiveTab('overview'); setError(''); window.history.pushState({}, '', `/tasks/${item.task_id}`); window.setTimeout(() => headingRef.current?.focus(), 0) }
+  const openTask = (item: Task) => { setTask(item); setActiveTab('overview'); setError(''); window.history.pushState({}, '', `/tasks/${item.task_id}`); window.setTimeout(() => headingRef.current?.focus({ preventScroll: true }), 0) }
   const retryTask = async () => { if (!task) return; try { const created = await api<SubmittedTask>(`/api/v1/tasks/${task.task_id}/retry`, { method: 'POST' }); const next = await api<Task>(`/api/v1/tasks/${created.task_id}`); setRecent((items) => [next, ...items.filter((item) => item.task_id !== next.task_id)]); openTask(next) } catch (err) { setError(errorMessage(err)) } }
   const cancelTask = async () => { if (!task) return; try { setTask(await api<Task>(`/api/v1/tasks/${task.task_id}/cancel`, { method: 'POST' })) } catch (err) { setError(errorMessage(err)) } }
-  const deleteTask = async () => { if (!task) return; try { await api<void>(`/api/v1/tasks/${task.task_id}`, { method: 'DELETE' }); setTask(null); setEvents([]); window.history.pushState({}, '', filterUrl(filters)); setRecent((items) => items.filter((item) => item.task_id !== task.task_id)) } catch (err) { setError(errorMessage(err)) } }
+  const deleteTask = async () => { if (!task) return; if (!window.confirm(`确定删除任务「${taskFilename(task)}」？此操作不可撤销。`)) return; try { await api<void>(`/api/v1/tasks/${task.task_id}`, { method: 'DELETE' }); setTask(null); setEvents([]); window.history.pushState({}, '', filterUrl(filters)); setRecent((items) => items.filter((item) => item.task_id !== task.task_id)) } catch (err) { setError(errorMessage(err)) } }
 
   const document = useMemo(() => documentOf(task), [task])
   const choose = (candidate?: File) => { if (!candidate) return; const suffix = `.${candidate.name.split('.').pop()?.toLowerCase()}`; if (capabilities && (!capabilities.allowed_suffixes.includes(suffix) || candidate.size > capabilities.max_upload_bytes)) { setError(candidate.size > capabilities.max_upload_bytes ? `文件超过 ${fileSize(capabilities.max_upload_bytes)} 上限` : `不支持 ${suffix} 文件`); return } setFile(candidate); setError('') }
@@ -254,7 +276,9 @@ function SupportedFormats() {
 export function TaskCenter({ recent, open, filters, setFilters, nextCursor, loadMore }: { recent: Task[]; open: (task: Task) => void; filters: Filters; setFilters: (filters: Filters) => void; nextCursor?: string; loadMore: () => void }) {
   const update = (key: keyof Filters, value: string) => setFilters({ ...filters, [key]: value })
   const activeFilterCount = Object.values(filters).filter(Boolean).length
-  return <div className="task-center"><div className="task-center-heading"><div><p className="eyebrow">TASK CENTER</p><h2>任务中心</h2></div><button className="clear-filters" type="button" disabled={!activeFilterCount} onClick={() => setFilters(emptyFilters)}><span aria-hidden="true">×</span> 清除筛选{activeFilterCount ? ` (${activeFilterCount})` : ''}</button></div><div className="task-filters"><label>搜索<input value={filters.query} onChange={(e) => update('query', e.target.value)} placeholder="文件名、任务或业务 ID" /></label><label>状态<select value={filters.status} onChange={(e) => update('status', e.target.value)}><option value="">全部</option>{Object.entries(statusLabels).map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label><label>文件类型<input value={filters.fileType} onChange={(e) => update('fileType', e.target.value)} placeholder="pdf" /></label><label>Provider<input value={filters.provider} onChange={(e) => update('provider', e.target.value)} /></label><label>错误码<input value={filters.errorCode} onChange={(e) => update('errorCode', e.target.value)} /></label><label>开始日期<input type="datetime-local" value={filters.createdAfter} onChange={(e) => update('createdAfter', e.target.value)} /></label><label>结束日期<input type="datetime-local" value={filters.createdBefore} onChange={(e) => update('createdBefore', e.target.value)} /></label></div>{recent.length ? <div className="recent"><h3>任务历史</h3>{recent.map((item) => <button key={item.task_id} onClick={() => open(item)}><span><strong>{taskFilename(item)}</strong><small>{formatDate(item.created_at)} · {item.task_id.slice(0, 13)}…</small></span><em className={`badge ${item.status}`}>{statusLabels[item.status]}</em></button>)}{nextCursor && <button className="load-more" type="button" onClick={loadMore}>加载更多</button>}</div> : <div className="empty"><div className="empty-mark">✦</div><h3>没有符合条件的任务</h3><p>调整筛选条件或上传新文件。</p></div>}</div>
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const advancedFilterCount = [filters.fileType, filters.provider, filters.errorCode, filters.createdAfter, filters.createdBefore].filter(Boolean).length
+  return <div className="task-center"><div className="task-center-heading"><div><p className="eyebrow">TASK CENTER</p><h2>任务中心</h2></div><button className="clear-filters" type="button" disabled={!activeFilterCount} onClick={() => setFilters(emptyFilters)}><span aria-hidden="true">×</span> 清除筛选{activeFilterCount ? ` (${activeFilterCount})` : ''}</button></div><div className="task-filters"><label>搜索<input value={filters.query} onChange={(e) => update('query', e.target.value)} placeholder="文件名、任务或业务 ID" /></label><label>状态<select value={filters.status} onChange={(e) => update('status', e.target.value)}><option value="">全部</option>{Object.entries(statusLabels).map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label><button className="filters-toggle" type="button" aria-expanded={advancedOpen} aria-controls="advanced-filters" onClick={() => setAdvancedOpen((open) => !open)}><span aria-hidden="true">{advancedOpen ? '▴' : '▾'}</span> {advancedOpen ? '收起高级筛选' : '更多筛选'}{advancedFilterCount ? ` (${advancedFilterCount})` : ''}</button><div id="advanced-filters" className={`filter-advanced ${advancedOpen ? 'open' : ''}`}><label>文件类型<input value={filters.fileType} onChange={(e) => update('fileType', e.target.value)} placeholder="pdf" /></label><label>Provider<input value={filters.provider} onChange={(e) => update('provider', e.target.value)} /></label><label>错误码<input value={filters.errorCode} onChange={(e) => update('errorCode', e.target.value)} /></label><label>开始日期<input type="datetime-local" value={filters.createdAfter} onChange={(e) => update('createdAfter', e.target.value)} /></label><label>结束日期<input type="datetime-local" value={filters.createdBefore} onChange={(e) => update('createdBefore', e.target.value)} /></label></div></div>{recent.length ? <div className="recent"><h3>任务历史</h3>{recent.map((item) => <button key={item.task_id} onClick={() => open(item)}><span><strong>{taskFilename(item)}</strong><small>{formatDate(item.created_at)} · {item.task_id.slice(0, 13)}…</small></span><em className={`badge ${item.status}`}>{statusLabels[item.status]}</em></button>)}{nextCursor && <button className="load-more" type="button" onClick={loadMore}>加载更多</button>}</div> : <div className="empty"><div className="empty-mark">✦</div><h3>没有符合条件的任务</h3><p>调整筛选条件或上传新文件。</p></div>}</div>
 }
 
 export function TaskView({ task, headingRef, events, document, fileId, plans, tables, representations, artifacts, activeTab, setActiveTab, onCancel, onRetry, onDelete, backToList }: { task: Task; headingRef: { current: HTMLHeadingElement | null }; events: TaskEvent[]; document?: Json; fileId?: string; plans: Json[]; tables: Json[]; representations: Json; artifacts: Artifact[]; activeTab: string; setActiveTab: (tab: never) => void; onCancel: () => void; onRetry: () => void; onDelete: () => void; backToList: () => void }) {
@@ -273,14 +297,15 @@ export function TaskView({ task, headingRef, events, document, fileId, plans, ta
   const duration = taskDuration(task)
   const durationLabel = terminal.has(task.status) ? '整体执行时间' : '已用时间'
   const onTabKey = (event: KeyboardEvent<HTMLElement>) => { const keys = ['ArrowLeft','ArrowRight','Home','End']; if (!keys.includes(event.key)) return; event.preventDefault(); const current = tabs.findIndex(([key]) => key === activeTab); const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; setActiveTab(tabs[next][0] as never); (event.currentTarget.querySelectorAll('button')[next] as HTMLButtonElement)?.focus() }
-  const visibleEvents = terminal.has(task.status) && !timelineExpanded && events.length > 3 ? [events[0], events.at(-1)!] : events
+  const selectTab = (key: string) => { setActiveTab(key as never); const url = new URL(window.location.href); if (key === 'overview') url.searchParams.delete('tab'); else url.searchParams.set('tab', key); window.history.replaceState({}, '', url) }
+  const visibleEvents = terminal.has(task.status) && !timelineExpanded && events.length > 3 ? events.slice(-3).reverse() : events
   const primaryAction = artifacts.length ? { label: `查看产物 ${artifacts.length}`, action: () => setActiveTab('artifacts' as never) } : task.status === 'partial' ? { label: '查看可用结果', action: () => setActiveTab('overview' as never) } : terminal.has(task.status) ? { label: '重试任务', action: onRetry } : null
-  return <><span className="sr-only" role="status" aria-live="polite">任务状态：{statusLabels[task.status]}</span><div className="task-detail-toolbar"><button className="back-to-list" type="button" onClick={backToList}>← 返回任务列表</button><div className="task-actions">{primaryAction && <button className="task-primary-action" type="button" onClick={primaryAction.action}>{primaryAction.label}</button>}{!terminal.has(task.status) && <button type="button" onClick={onCancel}>取消任务</button>}{terminal.has(task.status) && <button type="button" onClick={onRetry}>重试</button>}{terminal.has(task.status) && <button type="button" onClick={onDelete}>删除</button>}</div></div><div className="task-heading"><div><p className="eyebrow">任务 {task.task_id}</p><h2 ref={headingRef} tabIndex={-1}>{statusLabels[task.status]}</h2><p className="task-file-name">{taskFilename(task)}</p><p>{task.data_id ? `业务标识：${task.data_id}` : `创建于 ${formatDate(task.created_at)}`}</p></div><div className="task-meta"><span className="duration"><small>{durationLabel}</small><strong>{duration}</strong></span><span className={`badge large ${task.status}`}>{statusLabels[task.status]}</span></div></div>
+  return <><span className="sr-only" role="status" aria-live="polite">任务状态：{statusLabels[task.status]}</span><div className="task-detail-toolbar"><button className="back-to-list" type="button" onClick={backToList}>← 返回任务列表</button><div className="task-actions">{primaryAction && <button className="task-primary-action" type="button" onClick={primaryAction.action}>{primaryAction.label}</button>}{!terminal.has(task.status) && <button type="button" onClick={onCancel}>取消任务</button>}{terminal.has(task.status) && <button type="button" onClick={onRetry}>重试</button>}{terminal.has(task.status) && <button type="button" onClick={onDelete}>删除</button>}</div></div><div className="task-heading"><div><p className="eyebrow">任务 {task.task_id}</p><h2 ref={headingRef} tabIndex={-1}>{statusLabels[task.status]}</h2><p className="task-file-name">{taskFilename(task)}</p><p className="task-subline">{task.data_id ? `业务标识：${task.data_id} · ` : `创建于 ${formatDate(task.created_at)} · `}<strong>{durationLabel} {duration}</strong></p></div></div>
    <span className="sr-only" role="status" aria-live="polite">{events.length ? `最新事件：${events.at(-1)?.message || events.at(-1)?.type}` : ''}</span><section className="timeline-wrap"><div className="timeline-heading"><div><strong>执行过程</strong><span>{events.length ? `${events.length} 个事件` : '正在读取事件'}</span></div>{terminal.has(task.status) && events.length > 3 && <button type="button" onClick={() => setTimelineExpanded((expanded) => !expanded)}>{timelineExpanded ? '收起事件' : `展开全部 ${events.length} 个事件`}</button>}</div><div className="timeline" tabIndex={0} role="region" aria-label="任务执行时间线">{visibleEvents.length ? visibleEvents.map((event, index) => <Timeline key={event.sequence} label={`${formatDate(event.at)} · ${event.message || event.type}`} state={index === visibleEvents.length - 1 && !terminal.has(task.status) ? 'current' : 'done'} />) : <Timeline label="正在读取任务时间线" state="current" />}</div></section>
-  {plans.length > 0 && <div className="plan-card"><p className="card-label">自动计划 · RULE-BASED</p>{plans.map((step, index) => <div className="plan-step" key={String(step.step_id)}><b>{index + 1}</b><div><strong>{String(step.skill_name)}</strong><p>{String(step.reason)}</p></div><span className={`badge ${String(step.status)}`}>{String(step.status)}</span></div>)}</div>}
+  {plans.length > 0 && <div className="plan-card"><p className="card-label">自动计划 · RULE-BASED</p>{plans.map((step, index) => <div className="plan-step" key={String(step.step_id)}><b>{index + 1}</b><div><strong>{String(step.skill_name)}</strong><p>{String(step.reason)}</p></div><span className={`badge ${String(step.status)}`}>{stepLabel(String(step.status))}</span></div>)}</div>}
   {(['failed','partial','cancelled','interrupted'] as TaskStatus[]).includes(task.status) && <div className="failure" role="status"><strong>{task.status === 'failed' ? '任务未完成' : task.status === 'partial' ? '任务部分完成' : task.status === 'cancelled' ? '任务已取消' : '任务被服务重启中断'}</strong><p>{String(task.error?.message || (task.result?.error as Json | undefined)?.message || (task.status === 'partial' ? '部分内容可用，请查看 warning 和产物。' : '可以重试任务或查看执行详情。'))}</p></div>}
-  <nav className="tabs" role="tablist" aria-label="解析结果视图" onKeyDown={onTabKey}>{tabs.map(([key, label]) => <button key={key} id={`tab-${key}`} role="tab" tabIndex={activeTab === key ? 0 : -1} aria-selected={activeTab === key} aria-controls="result-panel" className={activeTab === key ? 'active' : ''} onClick={() => setActiveTab(key as never)}>{label}</button>)}</nav>
-  <div id="result-panel" role="tabpanel" tabIndex={0} aria-labelledby={`tab-${activeTab}`}><ResultTab tab={activeTab} task={task} document={document} fileId={fileId} tables={tables} representations={representations} artifacts={artifacts} /></div>
+  <nav className="tabs" role="tablist" aria-label="解析结果视图" onKeyDown={onTabKey}>{tabs.map(([key, label]) => <button key={key} id={`tab-${key}`} role="tab" tabIndex={activeTab === key ? 0 : -1} aria-selected={activeTab === key} aria-controls="result-panel" className={activeTab === key ? 'active' : ''} onClick={() => selectTab(key)}>{label}</button>)}</nav>
+  <div id="result-panel" role="tabpanel" tabIndex={0} aria-labelledby={`tab-${activeTab}`}><ResultTab tab={activeTab} task={task} document={document} fileId={fileId} tables={tables} representations={representations} artifacts={artifacts} onShowArtifacts={() => selectTab('artifacts')} /></div>
   </>
 }
 function Timeline({ label, state }: { label: string; state: string }) { return <div className={`timeline-item ${state}`}><i>{state === 'done' ? '✓' : ''}</i><span>{label}</span></div> }
@@ -302,17 +327,21 @@ function ArtifactItem({ artifact, taskId, index }: { artifact: Artifact; taskId:
  return <div className={`artifact ${image ? 'image-artifact' : ''}`}>{image ? <img src={downloadUrl} loading="lazy" alt={`${filename} 预览`} /> : <span aria-hidden="true">⌁</span>}<div><strong>{filename}</strong><small>{artifact.kind === 'export' ? '结果导出' : artifact.kind || '文件产物'}{artifact.size_bytes ? ` · ${fileSize(artifact.size_bytes)}` : ''}</small></div><a href={downloadUrl} download={filename}>下载</a></div>
 }
 function JsonView({ text, label }: { text: string; label: string }) { const [query, setQuery] = useState(''); const shown = query ? text.split('\n').filter((line) => line.toLowerCase().includes(query.toLowerCase())).join('\n') || '没有匹配内容' : text; return <div className="json-view"><div className="result-actions"><label>{label}搜索<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><CopyButton text={text} /></div><details open><summary>{label}</summary><pre className="json">{shown}</pre></details></div> }
-function ResultTab({ tab, task, document, fileId: _fileId, tables, representations, artifacts }: { tab: string; task: Task; document?: Json; fileId?: string; tables: Json[]; representations: Json; artifacts: Artifact[] }) {
+function ResultTab({ tab, task, document, fileId: _fileId, tables, representations, artifacts, onShowArtifacts }: { tab: string; task: Task; document?: Json; fileId?: string; tables: Json[]; representations: Json; artifacts: Artifact[]; onShowArtifacts: () => void }) {
+  const workbook = (document?.metadata as Json | undefined)?.excel_storage as Json | undefined
+  const hasStoredWorkbook = workbook?.filename === 'workbook.sqlite' || tables.some((table) => table.data_ref === 'workbook.sqlite')
+  const previewTruncated = hasStoredWorkbook && tables.some((table) => table.preview_truncated === true)
+  const previewHint = previewTruncated && <p className="spreadsheet-preview-note" role="note">这里只显示工作簿预览。{artifacts.length ? <button type="button" onClick={onShowArtifacts}>在产物中下载完整工作表</button> : '完整数据请下载工作表文件。'}</p>
  const plainText = String(representations.plain_text || '当前结果没有可用的纯文本表示。')
- const markdown = String(representations.markdown || '当前结果没有可用的 Markdown 表示。')
- const details = JSON.stringify({ plan: task.plan, error: task.error, warnings: task.warnings, result: task.result }, null, 2)
- const structured = JSON.stringify(document || task, null, 2)
+ const markdown = tab === 'markdown' ? String(representations.markdown || '当前结果没有可用的 Markdown 表示。') : ''
+ const details = tab === 'details' ? JSON.stringify({ plan: task.plan, error: task.error, warnings: task.warnings, result: task.result }, null, 2) : ''
+ const structured = tab === 'json' ? JSON.stringify(document || task, null, 2) : ''
  if (tab === 'overview') { const quality = task.result?.quality || {}; const provenance = task.result?.provenance || {}; const providers = Array.isArray(provenance.provider_chain) ? provenance.provider_chain.join(' → ') : '未知'; return <div className="overview"><Stat label="文档类型" value={String(document?.document_type || '等待结果')} /><Stat label="输入分类" value={String(quality.input_classification || '未知')} /><Stat label="表格" value={String(quality.tables ?? tables.length)} /><Stat label="图片" value={String(quality.images ?? ((document?.images as Json[] | undefined)?.length || 0))} /><Stat label="Provider 链路" value={providers} /><Stat label="截断" value={quality.truncated ? '是' : '否'} /><section><h3>解析摘要</h3><p>{plainText.slice(0, 600)}</p></section></div> }
- if (tab === 'text') return <><CopyButton text={plainText} /><pre className="text-preview">{plainText}</pre></>
- if (tab === 'markdown') return <><CopyButton text={markdown} /><pre className="text-preview markdown">{markdown}</pre></>
+ if (tab === 'text') return <>{previewHint}<CopyButton text={plainText} /><pre className="text-preview">{plainText}</pre></>
+ if (tab === 'markdown') return <>{previewHint}<CopyButton text={markdown} /><pre className="text-preview markdown">{markdown}</pre></>
  if (tab === 'ocr') return <OcrProofing document={document} taskId={task.task_id} artifacts={artifacts} />
  if (tab === 'html') return representations.html ? <iframe className="html-preview" title="HTML 内容预览" sandbox="" srcDoc={String(representations.html)} /> : <NoContent text="当前结果没有可用的 HTML 表示。" />
- if (tab === 'tables') return <div className="tables">{tables.length ? tables.map((table, index) => <Table key={index} table={table} />) : <NoContent text="当前结果没有可预览的表格。" />}</div>
+ if (tab === 'tables') return <div className="tables">{tables.length ? tables.some((table) => table.data_ref === 'workbook.sqlite') ? <><SpreadsheetTables key={task.task_id} taskId={task.task_id} tables={tables.filter((table) => table.data_ref === 'workbook.sqlite')} artifacts={artifacts} onShowArtifacts={onShowArtifacts} />{tables.filter((table) => table.data_ref !== 'workbook.sqlite').map((table, index) => <Table key={index} table={table} />)}</> : tables.map((table, index) => <Table key={index} table={table} />) : <NoContent text="当前结果没有可预览的表格。" />}</div>
  if (tab === 'artifacts') return <div className="artifacts">{artifacts.length ? artifacts.map((artifact, i) => <ArtifactItem artifact={artifact} taskId={task.task_id} index={i} key={artifact.artifact_id} />) : <NoContent text="当前结果没有可下载的 artifact。" />}</div>
  if (tab === 'details') return <JsonView text={details} label="执行详情" />
  return <JsonView text={structured} label="结构化 JSON" />
@@ -376,6 +405,56 @@ function tableRow(row: unknown): unknown[] {
   if (Array.isArray(row)) return row
   return typeof row === 'string' ? row.split(' | ') : [row]
 }
+export function SpreadsheetTables({ taskId, tables, artifacts, onShowArtifacts }: { taskId: string; tables: Json[]; artifacts: Artifact[]; onShowArtifacts: () => void }) {
+  const [selected, setSelected] = useState(0)
+  const sheets = tables.filter((table) => Number.isSafeInteger(table.sheet_id) && (table.sheet_id as number) >= 0)
+  if (!sheets.length) return <NoContent text="当前工作簿没有可查看的工作表。" />
+  const current = sheets[Math.min(selected, sheets.length - 1)]
+  return <section className="spreadsheet-results" aria-label="工作簿工作表">
+    {sheets.length > 1 && <nav className="spreadsheet-sheets" aria-label="选择工作表">{sheets.map((sheet, index) => <button key={String(sheet.sheet_id)} type="button" aria-current={index === selected ? 'true' : undefined} className={index === selected ? 'active' : ''} onClick={() => setSelected(index)}>{String(sheet.sheet_name || `工作表 ${index + 1}`)}</button>)}</nav>}
+    <SpreadsheetTable key={`${taskId}-${current.sheet_id}`} taskId={taskId} table={current} />
+    {artifacts.length > 0 && <p className="spreadsheet-preview-note">需要完整数据？<button type="button" onClick={onShowArtifacts}>下载工作表文件</button></p>}
+  </section>
+}
+
+/** Stored workbooks fetch only the selected sheet. The ordinary Table keeps its existing behavior. */
+export function SpreadsheetTable({ taskId, table }: { taskId: string; table: Json }) {
+  const sheetId = Number(table.sheet_id)
+  const title = String(table.sheet_name || '工作表')
+  const [cursors, setCursors] = useState([0])
+  const [pageIndex, setPageIndex] = useState(0)
+  const [page, setPage] = useState<SpreadsheetPage | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [retry, setRetry] = useState(0)
+  const afterRow = cursors[pageIndex]
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoading(true); setError(''); setPage(null)
+    const params = new URLSearchParams({ after_row: String(afterRow), limit: String(spreadsheetPageSize) })
+    api<SpreadsheetPage>(`/api/v1/tasks/${encodeURIComponent(taskId)}/sheets/${encodeURIComponent(sheetId)}/rows?${params}`, { signal: controller.signal })
+      .then((result) => { if (!controller.signal.aborted) setPage(result) })
+      .catch((reason) => { if (!controller.signal.aborted) setError(errorMessage(reason)) })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
+  }, [taskId, sheetId, afterRow, retry])
+  const rows = page?.rows || []
+  const columns = useMemo(() => spreadsheetColumns(rows), [page])
+  const nextCursor = page?.next_after_row
+  const next = () => {
+    if (loading || nextCursor == null || nextCursor <= afterRow) return
+    setCursors((current) => [...current.slice(0, pageIndex + 1), nextCursor])
+    setPageIndex((current) => current + 1)
+  }
+  const count = typeof table.row_count === 'number' ? table.row_count : undefined
+  return <section className="table-wrap spreadsheet-table" aria-label={`${title} 数据`}>
+    <p className="table-title"><strong>{title}</strong><span>{count === undefined ? '工作表' : `共 ${new Intl.NumberFormat('zh-CN').format(count)} 行`}</span></p>
+    <div className="spreadsheet-state" aria-live="polite">{loading ? '正在读取工作表…' : error ? <><span role="alert">读取失败：{error}</span> <button type="button" onClick={() => setRetry((value) => value + 1)}>重试</button></> : rows.length === 0 ? '此工作表没有可显示的内容。' : `第 ${pageIndex + 1} 页 · 工作表第 ${rows[0].row}–${rows[rows.length - 1].row} 行`}</div>
+    {!loading && !error && rows.length > 0 && <div className="table-scroll" role="region" aria-label={`${title} 表格内容`} tabIndex={0}><table><caption className="sr-only">{title}，第 {pageIndex + 1} 页，工作表第 {rows[0].row} 至 {rows[rows.length - 1].row} 行</caption><thead><tr><th scope="col" className="table-row-number">行</th>{columns.map((column) => <th key={column.column ?? column.label} scope="col">{column.label}</th>)}</tr></thead><tbody>{rows.map((row) => { const values = new Map(row.cells.map((cell) => [cell.column, cell])); return <tr key={row.row}><th className="table-row-number" scope="row">{row.row}</th>{columns.map((column) => { const cell = column.column === undefined ? undefined : values.get(column.column); const value = cell?.value ?? cell?.formula ?? ''; return <td key={column.column ?? column.label} title={cell?.formula || undefined}>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</td> })}</tr> })}</tbody></table></div>}
+    <nav className="table-pagination" aria-label={`${title} 行分页`}><button type="button" disabled={loading || pageIndex === 0} onClick={() => setPageIndex((value) => value - 1)}>上一页</button><span aria-live="polite">第 {pageIndex + 1} 页</span><button type="button" disabled={loading || Boolean(error) || nextCursor == null || nextCursor <= afterRow} onClick={next}>下一页</button></nav>
+  </section>
+}
+
 export function Table({ table }: { table: Json }) {
   const [page, setPage] = useState(0); const pageSize = 50
   useEffect(() => setPage(0), [table])

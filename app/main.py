@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
 from pathlib import Path
 from shutil import disk_usage, which
-from time import perf_counter
+from threading import Lock
+from time import monotonic, perf_counter
 from uuid import uuid4
 from typing import Literal
+from weakref import WeakKeyDictionary
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Path as ApiPath, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
@@ -19,9 +22,10 @@ from app.agent.pipeline import OfficeParsePipeline
 from app.config import get_settings
 from app.documents.models import FileInput, ParseContext, ParseOptions
 from app.files import LocalFileStore, StoredFilePublic
-from app.observability import HttpMetrics, JsonFormatter, logger
+from app.observability import HttpMetrics, JsonFormatter, TaskExecutionMetrics, logger
 from app.planning.models import now
 from app.planning.rule_planner import RuleBasedPlanner
+from app.storage.process_lock import DataDirectoryLock
 from app.skills.office.adapters.libreoffice import LibreOfficeProvider
 from app.skills.registry import create_default_registry
 from app.tasks.artifacts import ArtifactRepository
@@ -31,6 +35,8 @@ from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
 from app.tasks.models import ArtifactListResponse, CapabilitiesResponse, TaskListResponse, TaskRecord, TaskResultEnvelope, TaskSubmitResponse
 from app.tasks.repository import FileTaskRepository
 from app.tasks.retention import TaskStorageReclaimer
+from app.skills.excel.store import ExcelPageTooLarge, read_sheet_page
+from app.skills.excel.process import export_in_worker, remove_excel_outputs
 from app.version import __version__
 
 settings = get_settings()
@@ -41,15 +47,82 @@ if settings.log_format == "json":
     logger.propagate = False
 logger.setLevel(settings.log_level.upper())
 data_root = Path(settings.data_dir).resolve()
+data_directory_lock = DataDirectoryLock(data_root)
 file_store = LocalFileStore(str(data_root / "files"), settings.file_max_size_mb, settings.file_allowed_suffixes,
                             min_free_mb=settings.storage_min_free_mb)
 task_repository = FileTaskRepository(data_root / "tasks")
 artifact_repository = ArtifactRepository(data_root / "artifacts")
 http_metrics = HttpMetrics()
+task_execution_metrics = TaskExecutionMetrics()
 registry = create_default_registry()
 planner = RuleBasedPlanner(registry)
 executor = SkillExecutor(registry)
 pipeline = OfficeParsePipeline(executor, LibreOfficeProvider(command=settings.office_converter_command, timeout_seconds=settings.office_converter_timeout_seconds))
+
+_METRICS_CACHE_TTL_SECONDS = 15.0
+_METRICS_STATES = ("queued", "planning", "running", "cancelling", "succeeded", "partial", "failed", "cancelled", "interrupted")
+_metrics_cache_lock = Lock()
+_metrics_cache_at = 0.0
+_metrics_cache_value: tuple[dict[str, int], int] | None = None
+_metrics_refresh_tasks: WeakKeyDictionary = WeakKeyDictionary()
+
+
+def _scan_metrics_snapshot() -> tuple[dict[str, int], int]:
+    counts = {status: 0 for status in _METRICS_STATES}
+    tasks_root = data_root / "tasks"
+    for path in tasks_root.glob("task_*.json"):
+        if path.is_symlink():
+            continue
+        try:
+            record = TaskRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if record.status in counts:
+            counts[record.status] += 1
+
+    storage_bytes = 0
+    for path in data_root.rglob("*"):
+        try:
+            if path.is_file() and not path.is_symlink():
+                storage_bytes += path.stat().st_size
+        except OSError:
+            continue
+    return counts, storage_bytes
+
+
+async def _refresh_metrics_snapshot() -> tuple[dict[str, int], int]:
+    global _metrics_cache_at, _metrics_cache_value
+    scanned = await asyncio.to_thread(_scan_metrics_snapshot)
+    with _metrics_cache_lock:
+        _metrics_cache_value = scanned
+        _metrics_cache_at = monotonic()
+        return dict(scanned[0]), scanned[1]
+
+
+def _forget_metrics_refresh(loop: asyncio.AbstractEventLoop, task: asyncio.Task) -> None:
+    if not task.cancelled():
+        task.exception()
+    with _metrics_cache_lock:
+        if _metrics_refresh_tasks.get(loop) is task:
+            del _metrics_refresh_tasks[loop]
+
+
+async def _metrics_snapshot() -> tuple[dict[str, int], int]:
+    now = monotonic()
+    with _metrics_cache_lock:
+        if _metrics_cache_value is not None and now - _metrics_cache_at < _METRICS_CACHE_TTL_SECONDS:
+            counts, storage_bytes = _metrics_cache_value
+            return dict(counts), storage_bytes
+
+        loop = asyncio.get_running_loop()
+        refresh_task = _metrics_refresh_tasks.get(loop)
+        if refresh_task is None or refresh_task.done():
+            refresh_task = loop.create_task(_refresh_metrics_snapshot(), name="parseflow-metrics-refresh")
+            _metrics_refresh_tasks[loop] = refresh_task
+            refresh_task.add_done_callback(lambda task, current_loop=loop: _forget_metrics_refresh(current_loop, task))
+
+    counts, storage_bytes = await asyncio.shield(refresh_task)
+    return dict(counts), storage_bytes
 
 
 def _public_document(value: object) -> dict | None:
@@ -128,6 +201,7 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     workspace = artifact_repository.workspace(record.task_id)
     context.metadata["artifact_dir"] = str(workspace)
     context.metadata["output_dir"] = str(workspace)
+    context.metadata["excel_cancel_path"] = str(workspace.parent / ".excel-cancel")
     result = (await pipeline.execute(context, convert_to_pdf=step.skill_name == "office.pdf_parse_pipeline")).model_dump() if step.skill_name in {"office.parse_pipeline", "office.pdf_parse_pipeline"} else (await executor.execute(step.skill_name, context)).model_dump()
     step.finished_at = now()
     step.status = "succeeded" if result["status"] == "success" else "partial" if result["status"] == "partial" else "failed"
@@ -140,13 +214,32 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     if current:
         await task_repository.update(current.task_id, current.revision, lambda item: setattr(item, "plan", plan.model_dump(mode="json")))
     warnings = list(dict.fromkeys([*(result.get("warnings") or []), *((document or {}).get("warnings") or [])]))
+    disk_excel = bool(document and (document.get("metadata") or {}).get("excel_storage"))
+    cancel_path = workspace.parent / ".excel-cancel"
     if document:
         try:
-            generate_document_exports(document, workspace, max_bytes=settings.task_max_result_size_mb * 1024 * 1024)
+            if disk_excel:
+                export_status = await export_in_worker(document, workspace,
+                    max_bytes=settings.task_max_result_size_mb * 1024 * 1024, cancel_path=cancel_path)
+                if export_status == "limit":
+                    warnings.append("结果导出超过大小限制，完整 Excel 数据仍可下载")
+                elif export_status == "failed":
+                    warnings.append("结果导出生成失败，完整 Excel 数据仍可下载")
+            else:
+                await asyncio.to_thread(generate_document_exports, document, workspace, max_bytes=settings.task_max_result_size_mb * 1024 * 1024)
+        except asyncio.CancelledError:
+            if disk_excel:
+                remove_excel_outputs(workspace)
+            raise
         except ExportLimitExceeded:
             warnings.append("结果导出超过大小限制，已跳过导出文件")
         except Exception:
             warnings.append("结果导出生成失败，原始解析结果仍然可用")
+    if disk_excel and cancel_path.exists():
+        remove_excel_outputs(workspace)
+        document = None
+        result["status"] = "failed"
+        result["error"] = {"code": "task_cancelled", "message": "Excel 解析已取消", "retryable": False}
     artifacts = artifact_repository.collect(record.task_id)
     for artifact in artifacts:
         await task_manager.events.append(record.task_id, "artifact.created", message="解析产物已生成",
@@ -163,21 +256,29 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
 
 task_manager = PersistentTaskManager(run_parse_intent, task_repository, max_concurrent_executions=settings.task_max_concurrent_executions,
                                      max_queue_size=settings.task_queue_max_size, default_timeout_seconds=settings.task_default_timeout_seconds,
+                                     shutdown_grace_seconds=settings.task_shutdown_grace_seconds,
+                                      shutdown_cancel_grace_seconds=settings.task_shutdown_cancel_grace_seconds,
                                      result_ttl_seconds=settings.task_result_ttl_seconds, cleanup_interval_seconds=settings.task_cleanup_interval_seconds,
                                      reclaimer=TaskStorageReclaimer(data_root, task_repository, file_store=file_store,
-                                                                    orphan_min_age_seconds=settings.storage_orphan_min_age_seconds))
+                                                                    orphan_min_age_seconds=settings.storage_orphan_min_age_seconds),
+                                      execution_metrics=task_execution_metrics)
 
 from app.mcp_server import mcp
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    await task_manager.start()
-    async with mcp.session_manager.run():
+    data_directory_lock.acquire()
+    try:
+        await task_manager.start()
         try:
-            yield
+            async with mcp.session_manager.run():
+                yield
         finally:
             await task_manager.stop()
+    finally:
+        if task_manager.shutdown_complete:
+            data_directory_lock.release()
 
 
 app = FastAPI(title="Parse Agent", version=__version__, description="基于 LangChain 和 Skill 的文档解析 Agent", lifespan=lifespan)
@@ -319,6 +420,28 @@ async def get_task(task_id: str) -> TaskRecord:
     return task
 
 
+@app.get("/api/v1/tasks/{task_id}/sheets/{sheet_id}/rows", tags=["任务"])
+async def get_excel_sheet_rows(task_id: str, sheet_id: int = ApiPath(ge=0, le=2**31-1),
+                               after_row: int = Query(default=0, ge=0, le=1_048_576),
+                               limit: int = Query(default=100, ge=1, le=200)) -> dict:
+    task = await task_manager.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": "未找到任务"})
+    document = task.result.document if task.result else None
+    storage = ((document or {}).get("metadata") or {}).get("excel_storage")
+    if task.status not in {"succeeded", "partial"} or not isinstance(storage, dict) or storage.get("filename") != "workbook.sqlite":
+        raise HTTPException(status_code=404, detail={"code": "excel_data_not_found", "message": "此任务没有可分页的 Excel 数据"})
+    try:
+        return await asyncio.to_thread(read_sheet_page, artifact_repository.workspace(task_id) / "workbook.sqlite",
+                                       sheet_id, after_row=after_row, limit=limit)
+    except (KeyError, FileNotFoundError):
+        raise HTTPException(status_code=404, detail={"code": "excel_sheet_not_found", "message": "未找到工作表数据"}) from None
+    except ExcelPageTooLarge as exc:
+        raise HTTPException(status_code=413, detail={"code": "excel_row_too_large", "message": str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail={"code": "invalid_excel_page", "message": str(exc)}) from exc
+
+
 @app.get("/api/v1/tasks/{task_id}/events", response_model=TaskEventList, tags=["任务"])
 async def list_task_events(task_id: str, after: int = Query(default=0, ge=0),
                            limit: int = Query(default=100, ge=1, le=500)) -> TaskEventList:
@@ -373,16 +496,15 @@ async def download_artifact(task_id: str, artifact_id: str) -> FileResponse:
 
 @app.get("/api/v1/metrics", tags=["系统"])
 async def metrics() -> dict:
-    return {"http": http_metrics.snapshot(), "tasks": (await task_manager.metrics()).model_dump()}
+    return {"http": http_metrics.snapshot(), "tasks": (await task_manager.metrics()).model_dump(),
+            "execution": task_execution_metrics.snapshot()}
 
 
 @app.get("/metrics", include_in_schema=False)
 async def prometheus_metrics() -> Response:
-    records = await task_repository.list()
-    counts = {status: sum(record.status == status for record in records) for status in
-              ("queued", "planning", "running", "cancelling", "succeeded", "partial", "failed", "cancelled", "interrupted")}
-    storage_bytes = sum(path.stat().st_size for path in data_root.rglob("*") if path.is_file() and not path.is_symlink())
+    counts, storage_bytes = await _metrics_snapshot()
     body = http_metrics.prometheus(task_counts=counts, queue_depth=counts["queued"], storage_bytes=storage_bytes)
+    body += task_execution_metrics.prometheus()
     return Response(body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 

@@ -26,6 +26,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "defusedxml>=0.7.1",
     "striprtf>=0.0.29",
+    "pymupdf>=1.24,<2.0",
 ]
 
 [project.scripts]

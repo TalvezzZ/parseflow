@@ -4,9 +4,10 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from app.documents.models import ProviderError
-from app.observability import logger
+from app.observability import TaskExecutionMetrics, logger
 from app.storage.ids import new_id
 from app.tasks.events import FileTaskEventRepository
 from app.tasks.models import TERMINAL_STATUSES, TaskMetrics, TaskRecord, TaskResultEnvelope, TaskSubmitResponse, utc_now
@@ -24,88 +25,205 @@ class TaskQueueFullError(Exception):
         super().__init__("当前待处理任务较多，请稍后重试。")
 
 
+class TaskShutdownTimeoutError(RuntimeError):
+    """Raised when a task runner does not finish its cancellation cleanup in time."""
+
+
 class PersistentTaskManager:
     """Single-process persistent queue; disk records are the source of truth."""
 
     def __init__(self, runner: TaskRunner, repository: FileTaskRepository, *, max_concurrent_executions: int = 2,
                  max_queue_size: int = 100, default_timeout_seconds: int = 1800,
+                 shutdown_grace_seconds: int = 30, shutdown_cancel_grace_seconds: int = 2,
                  result_ttl_seconds: int = 86400, cleanup_interval_seconds: int = 300,
                  event_repository: FileTaskEventRepository | None = None,
-                 reclaimer: TaskStorageReclaimer | None = None) -> None:
+                 reclaimer: TaskStorageReclaimer | None = None,
+                 execution_metrics: TaskExecutionMetrics | None = None) -> None:
+        if max_concurrent_executions < 1:
+            raise ValueError("max_concurrent_executions must be at least 1")
+        if max_queue_size < 1:
+            raise ValueError("max_queue_size must be at least 1")
+        if default_timeout_seconds <= 0 or cleanup_interval_seconds <= 0 or result_ttl_seconds < 0:
+            raise ValueError("timeout, cleanup interval, and result retention values are invalid")
+        if shutdown_grace_seconds < 0 or shutdown_cancel_grace_seconds < 0:
+            raise ValueError("shutdown grace periods cannot be negative")
         self.runner = runner
         self.repository = repository
         self.events = event_repository or FileTaskEventRepository(repository.root.parent / "events")
         # repository.root is <data>/tasks; storage lives alongside it under <data>.
         self.reclaimer = reclaimer or TaskStorageReclaimer(repository.root.parent, repository)
+        self.execution_metrics = execution_metrics or TaskExecutionMetrics()
         self.max_concurrent_executions = max_concurrent_executions
         self.max_queue_size = max_queue_size
         self.default_timeout_seconds = default_timeout_seconds
+        self.shutdown_grace_seconds = shutdown_grace_seconds
+        self.shutdown_cancel_grace_seconds = shutdown_cancel_grace_seconds
         self.result_ttl_seconds = result_ttl_seconds
         self.cleanup_interval_seconds = cleanup_interval_seconds
-        self._queue: asyncio.Queue[str] = asyncio.Queue()
+        self._queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self._start_lock = asyncio.Lock()
+        self._admission_lock = asyncio.Lock()
+        self._dispatch_lock = asyncio.Lock()
+        self._active_task_ids: set[str] = set()
+        self._stopping = False
         self._workers: list[asyncio.Task[None]] = []
         self._cleanup_worker: asyncio.Task[None] | None = None
         self._started = False
         self._accepting = False
+        self._shutdown_failed = False
         self._loop: asyncio.AbstractEventLoop | None = None
 
     async def start(self) -> None:
         loop = asyncio.get_running_loop()
-        if self._started and self._loop is loop and any(not worker.done() for worker in self._workers):
-            return
-        # ASGI test clients may use a new loop. Disk is authoritative, so rebuild
-        # consumers and recover queued records rather than keeping stale workers.
-        if self._started:
+        if self._loop is not None and self._loop is not loop:
+            self._start_lock = asyncio.Lock()
+        async with self._start_lock:
+            if self._shutdown_failed:
+                if not self.shutdown_complete:
+                    raise TaskShutdownTimeoutError("cannot restart while a task worker is still shutting down")
+                # A previous lifespan may have failed closed while a Runner ignored
+                # cancellation. Recover only after every old task is actually done.
+                await self._stop_locked()
+            if self._started and self._loop is loop and any(not worker.done() for worker in self._workers):
+                return
+            # The filesystem is authoritative across shutdowns and test event loops.
+            if self._cleanup_worker and not self._cleanup_worker.done():
+                self._cleanup_worker.cancel()
+                await asyncio.gather(self._cleanup_worker, return_exceptions=True)
             self._workers = []
             self._cleanup_worker = None
             self._queue = asyncio.Queue()
-        self._loop = loop
-        self._started = True
-        self._accepting = True
-        recovered = await self.repository.recover()
-        for record in recovered:
-            if record.status == "queued":
-                self._queue.put_nowait(record.task_id)
-            elif record.status == "interrupted":
-                timeline = await self.events.list(record.task_id)
-                if not timeline.items or timeline.items[-1].type != "interrupted":
-                    await self.events.append(record.task_id, "interrupted", message="服务重启中断了任务")
-        self._workers = [asyncio.create_task(self._worker(index), name=f"parseflow-task-worker-{index}")
-                         for index in range(self.max_concurrent_executions)]
-        self._cleanup_worker = asyncio.create_task(self._cleanup_loop(), name="parseflow-task-cleanup")
+            self._admission_lock = asyncio.Lock()
+            self._dispatch_lock = asyncio.Lock()
+            self._active_task_ids = set()
+            self._stopping = False
+            self._loop = loop
+            self._started = True
+            self._accepting = True
+            recovered = await self.repository.recover()
+            for record in recovered:
+                if record.status == "queued":
+                    self.execution_metrics.record_recovery("queued")
+                    self._queue.put_nowait(record.task_id)
+                elif record.status == "interrupted":
+                    self.execution_metrics.record_recovery("interrupted")
+                    timeline = await self.events.list(record.task_id)
+                    if not timeline.items or timeline.items[-1].type != "interrupted":
+                        await self.events.append(record.task_id, "interrupted", message="服务重启中断了任务")
+            self._workers = [asyncio.create_task(self._worker(index), name=f"parseflow-task-worker-{index}")
+                             for index in range(self.max_concurrent_executions)]
+            self._cleanup_worker = asyncio.create_task(self._cleanup_loop(), name="parseflow-task-cleanup")
 
     async def stop(self) -> None:
-        self._accepting = False
-        for worker in self._workers:
-            worker.cancel()
-        if self._workers:
-            await asyncio.gather(*self._workers, return_exceptions=True)
+        loop = asyncio.get_running_loop()
+        if self._loop is not None and self._loop is not loop:
+            self._start_lock = asyncio.Lock()
+        async with self._start_lock:
+            await self._stop_locked()
+
+    async def _stop_locked(self) -> None:
+        async with self._admission_lock:
+            self._accepting = False
+
+        # Preserve queued records on disk, but prevent idle workers from starting
+        # another task once shutdown has begun.
+        async with self._dispatch_lock:
+            self._stopping = True
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    self._queue.task_done()
+            active_workers = [worker for worker in self._workers if not worker.done()]
+            for _ in active_workers:
+                self._queue.put_nowait(None)
+
         if self._cleanup_worker:
             self._cleanup_worker.cancel()
             await asyncio.gather(self._cleanup_worker, return_exceptions=True)
+        if self._workers:
+            _, pending = await asyncio.wait(self._workers, timeout=self.shutdown_grace_seconds)
+            if pending:
+                active_task_ids = set(self._active_task_ids)
+                for worker in pending:
+                    worker.cancel()
+                _, still_pending = await asyncio.wait(pending, timeout=self.shutdown_cancel_grace_seconds)
+                if still_pending:
+                    self._shutdown_failed = True
+                for task_id in active_task_ids:
+                    await self._mark_interrupted_after_shutdown(task_id)
+                if still_pending:
+                    raise TaskShutdownTimeoutError(
+                        f"{len(still_pending)} task worker(s) ignored cancellation after the cleanup grace period"
+                    )
+            await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers = []
         self._cleanup_worker = None
         self._started = False
+        self._shutdown_failed = False
+
+    @property
+    def shutdown_complete(self) -> bool:
+        workers_done = all(worker.done() for worker in self._workers)
+        cleanup_done = self._cleanup_worker is None or self._cleanup_worker.done()
+        return workers_done and cleanup_done
+
+    async def _mark_interrupted_after_shutdown(self, task_id: str) -> None:
+        current = await self.get(task_id)
+        if current is None or current.status not in {"planning", "running", "cancelling"}:
+            return
+
+        def interrupt(record: TaskRecord) -> None:
+            record.status = "interrupted"
+            record.finished_at = utc_now()
+            record.duration_ms = int((record.finished_at - (record.started_at or record.created_at)).total_seconds() * 1000)
+            record.error = {"code": "task_interrupted", "message": "服务关闭超出宽限期，任务被中断", "retryable": True}
+
+        try:
+            updated = await self.repository.update(task_id, current.revision, interrupt)
+        except (FileNotFoundError, TaskRevisionConflictError):
+            return
+        self.execution_metrics.observe_duration((updated.duration_ms or 0) / 1000, updated.status)
+        await self.events.append(updated.task_id, "interrupted", message="服务关闭超出宽限期，任务被中断")
 
     async def submit_parse(self, file_id: str, goal: str | None, data_id: str | None,
                            parse_mode: str = "auto",
                            filename: str | None = None, content_type: str | None = None) -> TaskSubmitResponse:
         await self.start()
-        if not self._accepting:
-            raise RuntimeError("任务服务正在关闭")
-        if self._queue.qsize() >= self.max_queue_size:
-            raise TaskQueueFullError(self._queue.qsize(), self.max_queue_size)
-        record = TaskRecord(task_id=new_id("task"), file_id=file_id, filename=filename, content_type=content_type,
-                            goal=goal, parse_mode=parse_mode, data_id=data_id)
-        await self.repository.create(record)
-        await self.events.append(record.task_id, "created", message="任务已创建")
-        await self.events.append(record.task_id, "queued", message="任务已进入队列")
-        self._queue.put_nowait(record.task_id)
-        return TaskSubmitResponse(
-            task_id=record.task_id, file_id=file_id, status="queued", queue_position=self._queue.qsize(),
-            created_at=record.created_at,
-            links={"self": f"/api/v1/tasks/{record.task_id}", "file": f"/api/v1/files/{file_id}/content"},
-        )
+        async with self._admission_lock:
+            if not self._accepting:
+                raise RuntimeError("任务服务正在关闭")
+            queue_depth = self._queue.qsize()
+            if queue_depth >= self.max_queue_size:
+                self.execution_metrics.record_queue_rejection("full")
+                raise TaskQueueFullError(queue_depth, self.max_queue_size)
+            record = TaskRecord(task_id=new_id("task"), file_id=file_id, filename=filename, content_type=content_type,
+                                goal=goal, parse_mode=parse_mode, data_id=data_id)
+            persisted = False
+            try:
+                await self.repository.create(record)
+                persisted = True
+                await self.events.append(record.task_id, "created", message="任务已创建")
+                await self.events.append(record.task_id, "queued", message="任务已进入队列")
+                self._queue.put_nowait(record.task_id)
+            except BaseException:
+                if persisted:
+                    try:
+                        await self.repository.delete(record.task_id)
+                    except Exception:
+                        logger.warning("Failed to roll back task record %s", record.task_id, exc_info=True)
+                    try:
+                        await self.events.delete(record.task_id)
+                    except Exception:
+                        logger.warning("Failed to roll back task events %s", record.task_id, exc_info=True)
+                raise
+            return TaskSubmitResponse(
+                task_id=record.task_id, file_id=file_id, status="queued", queue_position=self._queue.qsize(),
+                created_at=record.created_at,
+                links={"self": f"/api/v1/tasks/{record.task_id}", "file": f"/api/v1/files/{file_id}/content"},
+            )
 
     async def get(self, task_id: str) -> TaskRecord | None:
         return await self.repository.get(task_id)
@@ -207,6 +325,9 @@ class PersistentTaskManager:
             return updated
         if record.status in {"planning", "running"}:
             updated = await self.repository.update(task_id, record.revision, self._request_cancel)
+            marker = self.repository.root.parent / "artifacts" / task_id / ".excel-cancel"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch()
             await self.events.append(task_id, "cancel.requested", message="已请求取消任务")
             return updated
         return record
@@ -236,11 +357,20 @@ class PersistentTaskManager:
     async def _worker(self, _: int) -> None:
         while True:
             task_id = await self._queue.get()
+            record: TaskRecord | None = None
             try:
-                record = await self.get(task_id)
-                if record is not None and record.status == "queued":
+                if task_id is None:
+                    return
+                async with self._dispatch_lock:
+                    if not self._stopping:
+                        record = await self.get(task_id)
+                        if record is not None and record.status == "queued":
+                            self._active_task_ids.add(task_id)
+                if record is not None and record.status == "queued" and task_id in self._active_task_ids:
                     await self._execute(record)
             finally:
+                if task_id is not None:
+                    self._active_task_ids.discard(task_id)
                 self._queue.task_done()
 
     async def _transition(self, record: TaskRecord, status: str) -> TaskRecord:
@@ -251,6 +381,8 @@ class PersistentTaskManager:
         updated = await self.repository.update(record.task_id, record.revision, mutate)
         if status == "planning":
             await self.events.append(record.task_id, "planning.started", message="开始规划解析任务")
+            if updated.started_at is not None:
+                self.execution_metrics.observe_queue_wait((updated.started_at - updated.created_at).total_seconds())
         elif status == "running":
             await self.events.append(record.task_id, "step.started", message="开始执行解析", step="parse")
         return updated
@@ -265,11 +397,12 @@ class PersistentTaskManager:
             started = time.perf_counter()
             envelope = await asyncio.wait_for(self.runner(record), timeout=self.default_timeout_seconds)
             current = await self.get(record.task_id)
-            if current is None:
+            if current is None or current.status in TERMINAL_STATUSES:
                 return
             def complete(value: TaskRecord) -> None:
                 if value.cancel_requested:
                     self._cancel_now(value)
+                    self._discard_excel_outputs(value)
                     return
                 value.result = envelope
                 value.warnings = envelope.warnings
@@ -278,6 +411,7 @@ class PersistentTaskManager:
                 value.finished_at = utc_now()
                 value.duration_ms = int((time.perf_counter() - started) * 1000)
             completed = await self.repository.update(current.task_id, current.revision, complete)
+            self.execution_metrics.observe_duration((completed.duration_ms or 0) / 1000, completed.status)
             await self.events.append(completed.task_id, "step.finished", message="解析执行结束", step="parse",
                                      details={"status": completed.status})
             for warning in completed.warnings:
@@ -288,16 +422,29 @@ class PersistentTaskManager:
         except Exception as exc:
             await self._fail(record.task_id, "task_execution_failed", str(exc))
 
+    def _discard_excel_outputs(self, record: TaskRecord) -> None:
+        task_root = self.repository.root.parent / "artifacts" / record.task_id
+        if Path(record.filename or "").suffix.lower() not in {".xls", ".xlsx", ".xlsm"} and not (task_root / "files" / "workbook.sqlite").is_file():
+            return
+        from app.skills.excel.process import remove_excel_outputs
+        remove_excel_outputs(task_root / "files")
+        manifest = task_root / "manifest.json"
+        if manifest.resolve().parent == task_root.resolve():
+            manifest.unlink(missing_ok=True)
+
     async def _fail(self, task_id: str, code: str, message: str) -> None:
         current = await self.get(task_id)
         if current is None or current.status in TERMINAL_STATUSES:
             return
+        if code == "task_timeout":
+            self._discard_excel_outputs(current)
         def fail(record: TaskRecord) -> None:
             record.status = "failed"
             record.error = ProviderError(code=code, message=message, retryable=False).model_dump()
             record.finished_at = utc_now()
             record.duration_ms = int((record.finished_at - (record.started_at or record.created_at)).total_seconds() * 1000)
-        await self.repository.update(current.task_id, current.revision, fail)
+        failed = await self.repository.update(current.task_id, current.revision, fail)
+        self.execution_metrics.observe_duration((failed.duration_ms or 0) / 1000, failed.status)
         await self.events.append(task_id, "failed", message=message, details={"error_code": code})
 
     async def _cleanup_loop(self) -> None:

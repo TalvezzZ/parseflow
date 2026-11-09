@@ -29,6 +29,7 @@ test('real backend upload, deep link, artifact, retry and delete', async ({ page
   await expect(page).not.toHaveURL(previousTaskUrl)
   await expect(page).toHaveURL(/\/tasks\/task_[0-9a-f]{32}$/)
   await expect(page.getByRole('heading', { level: 2, name: '解析完成' })).toBeVisible()
+  page.once('dialog', (dialog) => dialog.accept())
   await page.getByRole('button', { name: '删除' }).click()
   await expect(page.getByRole('heading', { level: 2, name: '任务中心' })).toBeVisible()
 })

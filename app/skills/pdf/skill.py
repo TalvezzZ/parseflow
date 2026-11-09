@@ -30,7 +30,7 @@ class PdfParseSkill(Skill):
             version=self.version,
             kind="document_parser",
             input_types=["application/pdf"],
-            capabilities=["pdf_detection", "normal_parse", "markdown"],
+            capabilities=["pdf_detection", "normal_parse", "markdown", "images"],
             providers=[manifest["name"] for manifest in self.providers.list_manifests()],
         )
 

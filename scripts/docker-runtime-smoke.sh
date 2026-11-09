@@ -1,14 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project="parseflow-smoke-$RANDOM"
+project="parseflow-smoke-${UID:-0}-$$-$RANDOM"
 port="${PARSEFLOW_SMOKE_PORT:-18080}"
+version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+export PARSEFLOW_IMAGE="${PARSEFLOW_IMAGE:-parseflow:$version}"
+if [ -n "${GITHUB_ENV:-}" ]; then echo "PARSEFLOW_IMAGE=$PARSEFLOW_IMAGE" >> "$GITHUB_ENV"; fi
 export PARSEFLOW_DATA_VOLUME="${project}-data"
 export PARSEFLOW_MODELS_VOLUME="${project}-models"
+for volume in "$PARSEFLOW_DATA_VOLUME" "$PARSEFLOW_MODELS_VOLUME"; do
+  if docker volume inspect "$volume" >/dev/null 2>&1; then
+    echo "Refusing to remove pre-existing smoke volume: $volume" >&2
+    exit 1
+  fi
+done
+existing_containers="$(docker compose -p "$project" ps -q 2>/dev/null || true)"
+if [ -n "$existing_containers" ]; then
+  echo "Refusing to stop pre-existing smoke project: $project" >&2
+  exit 1
+fi
 cleanup() { docker compose -p "$project" down -v --remove-orphans >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
-PARSEFLOW_PORT="$port" docker compose -p "$project" up --build -d
+up_args=(--build)
+if [ "${PARSEFLOW_SMOKE_SKIP_BUILD:-false}" = "true" ]; then up_args=(--no-build); fi
+PARSEFLOW_PORT="$port" docker compose -p "$project" up "${up_args[@]}" -d
 ready=false
 for _ in $(seq 1 90); do
   if curl -fsS "http://127.0.0.1:$port/ready" >/dev/null 2>&1; then ready=true; break; fi

@@ -14,7 +14,7 @@ cd web && npm run build
 The backend suite covers:
 
 - automatic planning for every publicly allowed upload extension;
-- PDF text parsing and scanned-PDF PaddleOCR routing;
+- PDF provider selection via `PDF_NORMAL_PROVIDER`, text parsing, PyMuPDF no-OCR embedded-image extraction, and scanned-PDF PaddleOCR routing;
 - OCR provider normalization, input limits, empty output, and unavailable dependencies;
 - PDF, Word, Excel, PowerPoint, RTF, CSV/TSV, HTML, XML, Office conversion, and media preparation paths;
 - upload/download lifecycle, extension rejection, artifact traversal protection, request IDs, API-key protection, and CORS preflight;
@@ -82,7 +82,7 @@ For a release candidate, run the default gate on a workstation or CI image conta
 The Vite build validates TypeScript and production bundling. Before tagging a stable release, also manually check the running workbench:
 
 1. Upload a CSV/XLSX and open **表格**; string and 2D table rows must render without a white screen.
-2. Open a text PDF; **概览**, **正文**, and **Markdown** must show extracted content.
+2. Set `PDF_NORMAL_PROVIDER=pdf.normal.pymupdf` and open a text PDF with an embedded raster image; **概览** must count the image, and **产物** must provide its preview/download without OCR.
 3. Open a scanned PDF after installing the OCR group; its task must finish through `pdf.ocr.paddle`, and **OCR 校对** must show the page image with coordinate overlays.
 4. Open an existing task and use **返回任务列表**.
 5. Confirm supported-format guidance and upload keyboard activation using Enter/Space.

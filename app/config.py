@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.skills.text_formats import TEXT_SUFFIXES
@@ -43,21 +44,25 @@ class Settings(BaseSettings):
     media_max_file_size_mb: int = 2048
     excel_normal_provider: str = "excel.normal.openpyxl"
     excel_max_sheets: int = 30
-    excel_max_semantic_cells: int = 1000000
+    excel_max_semantic_cells: int = 10_000_000
     excel_max_sheet_rows: int = 100000
     excel_max_columns: int = 1000
     excel_max_file_size_mb: int = 100
     excel_max_uncompressed_size_mb: int = 500
     excel_max_zip_entries: int = 10000
     excel_max_sheet_xml_size_mb: int = 100
+    excel_max_preview_cells: int = Field(default=2000, ge=0, le=10000)
+    excel_max_preview_rows: int = Field(default=100, ge=0, le=1000)
+    excel_max_preview_bytes: int = Field(default=1_000_000, ge=0, le=4_000_000)
+    excel_max_storage_mb: int = Field(default=4096, ge=1)
     ppt_normal_provider: str = "ppt.normal.python-pptx"
-    task_queue_enabled: bool = True
-    task_max_concurrent_executions: int = 2
-    task_queue_max_size: int = 100
-    task_default_timeout_seconds: int = 1800
-    task_result_ttl_seconds: int = 86400
-    task_cleanup_interval_seconds: int = 300
-    task_shutdown_grace_seconds: int = 30
+    task_max_concurrent_executions: int = Field(default=2, ge=1)
+    task_queue_max_size: int = Field(default=100, ge=1)
+    task_default_timeout_seconds: int = Field(default=1800, gt=0)
+    task_result_ttl_seconds: int = Field(default=86400, ge=0)
+    task_cleanup_interval_seconds: int = Field(default=300, gt=0)
+    task_shutdown_grace_seconds: int = Field(default=30, ge=0)
+    task_shutdown_cancel_grace_seconds: int = Field(default=2, ge=0)
     task_max_result_size_mb: int = 20
     storage_min_free_mb: int = 1024
     storage_soft_free_mb: int = 2048

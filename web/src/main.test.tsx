@@ -1,7 +1,7 @@
 import { createRef, useState } from 'react'
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
-import { OcrProofing, ParseModeSelector, Table, TaskCenter, TaskView, ocrPages } from './main'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { OcrProofing, ParseModeSelector, SpreadsheetTables, Table, TaskCenter, TaskView, ocrPages } from './main'
 import type { ParseMode } from './main'
 
 const task = { task_id: `task_${'1'.repeat(32)}`, file_id: `file_${'2'.repeat(32)}`, status: 'interrupted', created_at: new Date().toISOString(), result: { status: 'failed', artifacts: [], steps: [], warnings: [], metrics: {} } }
@@ -170,6 +170,85 @@ describe('Parse mode selector', () => {
     expect(screen.getByRole('option', { name: /增强解析/ })).toBeDisabled()
     fireEvent.click(screen.getByRole('option', { name: /标准解析/ }))
     expect(screen.getByRole('button', { name: /标准解析/ })).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
+afterEach(() => vi.unstubAllGlobals())
+
+describe('Stored workbook pagination', () => {
+  const sheets = Array.from({ length: 30 }, (_, index) => ({ sheet_id: index, data_ref: 'workbook.sqlite', sheet_name: `工作表 ${index + 1}`, row_count: 12, semantic_cell_count: 40, preview_truncated: true }))
+  const response = (body: unknown) => ({ ok: true, json: async () => body }) as Response
+
+  it('fetches only the selected sheet, preserves row numbers and sparse column gaps, and honors short pages', async () => {
+    const fetcher = vi.fn(async (url: string) => response(url.includes('after_row=10')
+      ? { sheet_id: 1, sheet_name: '工作表 1', rows: [{ row: 25, cells: [{ coordinate: 'C25', row: 25, column: 3, value: 'second' }] }], next_after_row: null }
+      : { sheet_id: 1, sheet_name: '工作表 1', rows: [{ row: 7, cells: [{ coordinate: 'A7', row: 7, column: 1, value: 0 }, { coordinate: 'C7', row: 7, column: 3, value: 'first' }] }, { row: 10, cells: [{ coordinate: 'C10', row: 10, column: 3, value: 'last' }] }], next_after_row: 10 }))
+    vi.stubGlobal('fetch', fetcher)
+    render(<SpreadsheetTables taskId={task.task_id} tables={sheets} artifacts={[]} onShowArtifacts={vi.fn()} />)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher.mock.calls[0][0]).toContain('/sheets/0/rows?after_row=0&limit=100')
+    expect(await screen.findByRole('table', { name: /工作表 1，第 1 页/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'B' })).toBeInTheDocument()
+    expect(screen.getByRole('rowheader', { name: '7' })).toBeInTheDocument()
+    expect(screen.getByRole('rowheader', { name: '10' })).toBeInTheDocument()
+    const first = screen.getByRole('rowheader', { name: '7' }).parentElement!
+    expect(first.querySelectorAll('td')).toHaveLength(3)
+    expect(first.querySelectorAll('td')[0]).toHaveTextContent('0')
+    expect(first.querySelectorAll('td')[1]).toBeEmptyDOMElement()
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    await screen.findByText('second')
+    expect(fetcher.mock.calls[1][0]).toContain('after_row=10')
+    expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '上一页' }))
+    await screen.findByText('first')
+    expect(fetcher.mock.calls[2][0]).toContain('after_row=0')
+  })
+
+  it('aborts stale sheet requests and renders only the selected sheet', async () => {
+    let resolveFirst!: (value: Response) => void
+    const first = new Promise<Response>((resolve) => { resolveFirst = resolve })
+    const fetcher = vi.fn((url: string) => url.includes('/sheets/0/') ? first : Promise.resolve(response({ sheet_id: 2, sheet_name: '工作表 2', rows: [{ row: 3, cells: [{ coordinate: 'B3', row: 3, column: 2, value: 'selected' }] }], next_after_row: null })))
+    vi.stubGlobal('fetch', fetcher)
+    render(<SpreadsheetTables taskId={task.task_id} tables={sheets} artifacts={[]} onShowArtifacts={vi.fn()} />)
+    const signal = (fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].signal
+    fireEvent.click(screen.getByRole('button', { name: '工作表 2' }))
+    expect(signal?.aborted).toBe(true)
+    resolveFirst(response({ sheet_id: 1, sheet_name: '工作表 1', rows: [{ row: 1, cells: [{ coordinate: 'A1', row: 1, column: 1, value: 'stale' }] }], next_after_row: null }))
+    expect(await screen.findByText('selected')).toBeInTheDocument()
+    expect(screen.queryByText('stale')).not.toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers retry on failure and explains empty sheets', async () => {
+    const fetcher = vi.fn().mockRejectedValueOnce(new Error('连接中断')).mockResolvedValueOnce(response({ sheet_id: 1, sheet_name: '工作表 1', rows: [], next_after_row: null }))
+    vi.stubGlobal('fetch', fetcher)
+    render(<SpreadsheetTables taskId={task.task_id} tables={[sheets[0]]} artifacts={[]} onShowArtifacts={vi.fn()} />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('连接中断')
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByText('此工作表没有可显示的内容。')).toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps distant column gaps explicit without expanding an Excel-wide grid', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ sheet_id: 0, sheet_name: '工作表 1', rows: [{ row: 9999, cells: [{ coordinate: 'XFD9999', row: 9999, column: 16384, value: 'far right' }] }], next_after_row: null })))
+    render(<SpreadsheetTables taskId={task.task_id} tables={[sheets[0]]} artifacts={[]} onShowArtifacts={vi.fn()} />)
+    await screen.findByText('far right')
+    expect(screen.getByRole('columnheader', { name: 'A–XFC（空列）' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'XFD' })).toBeInTheDocument()
+    expect(screen.getAllByRole('cell')).toHaveLength(2)
+  })
+
+  it('does not stringify result details on overview and labels truncated text previews', () => {
+    const document = { metadata: { excel_storage: { filename: 'workbook.sqlite', schema_version: 1 } }, tables: sheets, document_type: 'xlsx' }
+    const spy = vi.spyOn(JSON, 'stringify')
+    const props = { task: task as any, headingRef: createRef<HTMLHeadingElement>(), events: [], document, plans: [], tables: sheets, representations: { plain_text: '预览内容' }, artifacts: [{ artifact_id: 'csv', filename: 'sheet-001.csv' }], setActiveTab: vi.fn(), onCancel: vi.fn(), onRetry: vi.fn(), onDelete: vi.fn(), backToList: vi.fn() }
+    const view = render(<TaskView {...props} activeTab="overview" />)
+    expect(spy.mock.calls.some(([value]) => value === document)).toBe(false)
+    view.rerender(<TaskView {...props} activeTab="text" />)
+    expect(screen.getByText(/这里只显示工作簿预览/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '在产物中下载完整工作表' }))
+    expect(props.setActiveTab).toHaveBeenCalledWith('artifacts')
+    spy.mockRestore()
   })
 })
 

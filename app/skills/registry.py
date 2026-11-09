@@ -1,5 +1,6 @@
 from app.skills.base import EchoSkill, Skill
 from app.skills.pdf.adapters.inspector import PdfInspectorAdapter, PdfInspectorParserProvider
+from app.skills.pdf.adapters.pymupdf import PyMuPdfParserProvider
 from app.skills.pdf.adapters.paddle_ocr import PaddleOcrPdfProvider
 from app.skills.image import ImageParseSkill
 from app.skills.image_ocr import PaddleOcrImageProvider
@@ -44,7 +45,10 @@ class SkillRegistry:
 
 def create_default_registry() -> SkillRegistry:
     settings = get_settings()
-    pdf_providers = [PdfInspectorParserProvider()]
+    pdf_providers = [
+        PdfInspectorParserProvider(),
+        PyMuPdfParserProvider(),
+    ]
     if settings.pdf_ocr_enabled:
         pdf_providers.append(PaddleOcrPdfProvider(
             device=settings.pdf_ocr_device,
@@ -86,6 +90,10 @@ def create_default_registry() -> SkillRegistry:
         max_uncompressed_size_mb=settings.excel_max_uncompressed_size_mb,
         max_zip_entries=settings.excel_max_zip_entries,
         max_sheet_xml_size_mb=settings.excel_max_sheet_xml_size_mb,
+        max_preview_cells=settings.excel_max_preview_cells,
+        max_preview_rows=settings.excel_max_preview_rows,
+        max_preview_bytes=settings.excel_max_preview_bytes,
+        max_storage_mb=settings.excel_max_storage_mb,
     )])
     ppt_providers = ProviderRegistry([PythonPptxProvider()])
     text_providers = ProviderRegistry([

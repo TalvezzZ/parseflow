@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 import pytest
 
+from app import main as main_module
 from app.main import _parse_strategy, _public_document, app
 from app.tasks.events import FileTaskEventRepository
-from app.tasks.manager import PersistentTaskManager, TaskQueueFullError
+from app.tasks.manager import PersistentTaskManager, TaskQueueFullError, TaskShutdownTimeoutError
 from app.tasks.models import TaskRecord, TaskResultEnvelope
 from app.tasks.repository import FileTaskRepository, TaskRevisionConflictError
 
@@ -82,6 +84,24 @@ def test_public_document_recursively_removes_server_paths() -> None:
     serialized = json.dumps(document)
     assert "/private/" not in serialized
     assert document["images"][0]["relative_path"] == "images/a.png"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"max_concurrent_executions": 0},
+        {"max_queue_size": 0},
+        {"default_timeout_seconds": 0},
+        {"shutdown_grace_seconds": -1},
+        {"shutdown_cancel_grace_seconds": -1},
+    ],
+)
+def test_manager_rejects_invalid_runtime_bounds(tmp_path: Path, options: dict[str, int]) -> None:
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
+        return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
+
+    with pytest.raises(ValueError):
+        PersistentTaskManager(runner, FileTaskRepository(tmp_path / "tasks"), **options)
 
 
 @pytest.mark.asyncio
@@ -168,7 +188,287 @@ async def test_persistent_manager_limits_queue_and_cancels_queued_task(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_terminal_task_can_retry_and_delete_via_public_api() -> None:
+async def test_submission_rolls_back_if_queue_event_persistence_fails(tmp_path: Path) -> None:
+    class FailingEvents(FileTaskEventRepository):
+        async def append(self, task_id: str, event_type: str, **kwargs):
+            if event_type == "queued":
+                raise OSError("simulated event storage failure")
+            return await super().append(task_id, event_type, **kwargs)
+
+    repository = FileTaskRepository(tmp_path / "tasks")
+    events = FailingEvents(tmp_path / "events")
+
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
+        return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
+
+    manager = PersistentTaskManager(runner, repository, event_repository=events)
+    await manager.start()
+    try:
+        with pytest.raises(OSError, match="simulated event storage failure"):
+            await manager.submit_parse("file_" + "5" * 32, None, None)
+        assert await repository.list() == []
+        assert manager._queue.qsize() == 0
+        assert list(events.root.glob("task_*.json")) == []
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_submissions_cannot_exceed_waiting_queue_capacity(tmp_path: Path) -> None:
+    running, release = asyncio.Event(), asyncio.Event()
+
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
+        running.set()
+        await release.wait()
+        return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
+
+    manager = PersistentTaskManager(runner, FileTaskRepository(tmp_path / "tasks"),
+                                    max_concurrent_executions=1, max_queue_size=1)
+    await manager.start()
+    try:
+        await manager.submit_parse("file_" + "a" * 32, None, None)
+        await asyncio.wait_for(running.wait(), timeout=1)
+        results = await asyncio.gather(
+            *(manager.submit_parse(f"file_{index:032x}", None, None) for index in range(20)),
+            return_exceptions=True,
+        )
+        accepted = [item for item in results if not isinstance(item, Exception)]
+        rejected = [item for item in results if isinstance(item, TaskQueueFullError)]
+        assert len(accepted) == 1
+        assert len(rejected) == 19
+        assert manager._queue.qsize() == 1
+    finally:
+        release.set()
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_submissions_start_one_worker_pool(tmp_path: Path) -> None:
+    two_running, release = asyncio.Event(), asyncio.Event()
+    active = 0
+
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
+        nonlocal active
+        active += 1
+        if active == 2:
+            two_running.set()
+        await release.wait()
+        return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
+
+    manager = PersistentTaskManager(runner, FileTaskRepository(tmp_path / "tasks"),
+                                    max_concurrent_executions=2, max_queue_size=10)
+    try:
+        results = await asyncio.gather(
+            *(manager.submit_parse(f"file_{index:032x}", None, None) for index in range(6)),
+            return_exceptions=True,
+        )
+        assert all(not isinstance(item, Exception) for item in results)
+        await asyncio.wait_for(two_running.wait(), timeout=1)
+        assert len(manager._workers) == 2
+        assert active == 2
+    finally:
+        release.set()
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_stop_waits_for_in_progress_recovery(tmp_path: Path) -> None:
+    recovery_entered, release_recovery = asyncio.Event(), asyncio.Event()
+
+    class BarrierRepository(FileTaskRepository):
+        async def recover(self):
+            recovery_entered.set()
+            await release_recovery.wait()
+            return await super().recover()
+
+    manager = PersistentTaskManager(
+        lambda record: asyncio.sleep(0, result=TaskResultEnvelope(status="succeeded", file_id=record.file_id)),
+        BarrierRepository(tmp_path / "tasks"),
+    )
+    starting = asyncio.create_task(manager.start())
+    stopping = None
+    try:
+        await asyncio.wait_for(recovery_entered.wait(), timeout=1)
+        stopping = asyncio.create_task(manager.stop())
+        await asyncio.sleep(0)
+        assert not stopping.done()
+        release_recovery.set()
+        await asyncio.gather(starting, stopping)
+    finally:
+        release_recovery.set()
+        if not starting.done():
+            await asyncio.gather(starting, return_exceptions=True)
+        if stopping is not None and not stopping.done():
+            await asyncio.gather(stopping, return_exceptions=True)
+    assert manager._workers == []
+    assert manager._cleanup_worker is None
+    assert manager._started is False
+    assert manager.shutdown_complete is True
+
+
+@pytest.mark.asyncio
+async def test_graceful_stop_finishes_active_task_and_recovers_queued_task(tmp_path: Path) -> None:
+    active, release = asyncio.Event(), asyncio.Event()
+    repository = FileTaskRepository(tmp_path / "tasks")
+
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
+        if record.file_id.endswith("1"):
+            active.set()
+            await release.wait()
+        return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
+
+    manager = PersistentTaskManager(runner, repository, max_concurrent_executions=1,
+                                    max_queue_size=1, shutdown_grace_seconds=1)
+    await manager.start()
+    first = await manager.submit_parse("file_" + "1" * 32, None, None)
+    await asyncio.wait_for(active.wait(), timeout=1)
+    second = await manager.submit_parse("file_" + "2" * 32, None, None)
+
+    stopping = asyncio.create_task(manager.stop())
+    await asyncio.sleep(0.01)
+    assert not stopping.done()
+    release.set()
+    await stopping
+    assert (await manager.get(first.task_id)).status == "succeeded"
+    assert (await manager.get(second.task_id)).status == "queued"
+
+    await manager.start()
+    try:
+        for _ in range(100):
+            if (await manager.get(second.task_id)).status == "succeeded":
+                break
+            await asyncio.sleep(0.01)
+        assert (await manager.get(second.task_id)).status == "succeeded"
+    finally:
+        await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_grace_expiry_marks_active_task_interrupted(tmp_path: Path) -> None:
+    active = asyncio.Event()
+
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
+        active.set()
+        await asyncio.Event().wait()
+        return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
+
+    manager = PersistentTaskManager(runner, FileTaskRepository(tmp_path / "tasks"),
+                                    max_concurrent_executions=1, shutdown_grace_seconds=0.01)
+    await manager.start()
+    submitted = await manager.submit_parse("file_" + "3" * 32, None, None)
+    await asyncio.wait_for(active.wait(), timeout=1)
+    await manager.stop()
+
+    interrupted = await manager.get(submitted.task_id)
+    assert interrupted.status == "interrupted"
+    assert interrupted.error["code"] == "task_interrupted"
+    assert interrupted.error["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_stop_bounds_uncooperative_runner_cancellation(tmp_path: Path) -> None:
+    active, cancellation_seen, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
+        active.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            await release.wait()
+            return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
+
+    manager = PersistentTaskManager(
+        runner,
+        FileTaskRepository(tmp_path / "tasks"),
+        max_concurrent_executions=1,
+        shutdown_grace_seconds=0.01,
+        shutdown_cancel_grace_seconds=0.02,
+    )
+    await manager.start()
+    submitted = await manager.submit_parse("file_" + "4" * 32, None, None)
+    await asyncio.wait_for(active.wait(), timeout=1)
+
+    try:
+        with pytest.raises(TaskShutdownTimeoutError):
+            await asyncio.wait_for(manager.stop(), timeout=0.5)
+        assert cancellation_seen.is_set()
+        assert manager.shutdown_complete is False
+        assert (await manager.get(submitted.task_id)).status == "interrupted"
+        with pytest.raises(TaskShutdownTimeoutError):
+            await manager.start()
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*manager._workers, return_exceptions=True), timeout=1)
+        await manager.start()
+        assert manager._started and manager._workers
+    finally:
+        release.set()
+        await asyncio.wait_for(manager.stop(), timeout=1)
+    assert manager.shutdown_complete is True
+
+
+@pytest.mark.asyncio
+async def test_lifespan_retains_data_lock_after_shutdown_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    active, release = asyncio.Event(), asyncio.Event()
+
+    class TrackingLock:
+        acquired = False
+        releases = 0
+
+        def acquire(self) -> None:
+            self.acquired = True
+
+        def release(self) -> None:
+            self.acquired = False
+            self.releases += 1
+
+    class FakeSessionManager:
+        @asynccontextmanager
+        async def run(self):
+            yield
+
+    async def runner(record: TaskRecord) -> TaskResultEnvelope:
+        active.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release.wait()
+            return TaskResultEnvelope(status="succeeded", file_id=record.file_id)
+
+    manager = PersistentTaskManager(
+        runner,
+        FileTaskRepository(tmp_path / "tasks"),
+        max_concurrent_executions=1,
+        shutdown_grace_seconds=0.01,
+        shutdown_cancel_grace_seconds=0.02,
+    )
+    directory_lock = TrackingLock()
+    monkeypatch.setattr(main_module, "task_manager", manager)
+    monkeypatch.setattr(main_module, "data_directory_lock", directory_lock)
+    monkeypatch.setattr(main_module, "mcp", type("FakeMCP", (), {"session_manager": FakeSessionManager()})())
+
+    try:
+        with pytest.raises(TaskShutdownTimeoutError):
+            async with main_module.lifespan(app):
+                await manager.submit_parse("file_" + "6" * 32, None, None)
+                await asyncio.wait_for(active.wait(), timeout=1)
+        assert directory_lock.acquired is True
+        assert directory_lock.releases == 0
+
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*manager._workers, return_exceptions=True), timeout=1)
+        assert manager.shutdown_complete is True
+        # The lifespan has failed; keep the process lock fail-closed until exit.
+        assert directory_lock.acquired is True
+        assert directory_lock.releases == 0
+    finally:
+        release.set()
+        if manager._workers or manager._started:
+            await asyncio.wait_for(manager.stop(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_retry_and_delete_task_api() -> None:
     created = await request("POST", "/api/v1/tasks/parse", files={"file": ("retry.json", b"{}", "application/json")})
     task_id = created.json()["task_id"]
     task = await wait_for_terminal(task_id)

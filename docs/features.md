@@ -28,7 +28,7 @@ ParseFlow 是一个面向单机或可信内网环境的异步文档解析平台�
 
 平台按文件类型自动选择已注册 Skill/Provider，覆盖：
 
-- PDF：文本、页面、表格和 OCR/增强解析路径。
+- PDF：文本型 PDF 的普通解析可由 `PDF_NORMAL_PROVIDER` 在 pdf-inspector 与 PyMuPDF 之间切换；PyMuPDF 路径可无 OCR 提取嵌入栅格图片并记录页码、坐标，扫描 PDF 仍走 OCR/增强解析路径。
 - Word 与 RTF：DOC/DOCX、复杂 RTF 的转换和结构化结果。
 - 表格：XLS/XLSX/XLSM、CSV、TSV，包含工作表、稀疏单元格、公式、合并单元格、表格和图片信息。
 - 演示：PPT/PPTX，提取幻灯片文本、表格、图片和组合形状。
