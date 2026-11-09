@@ -1,7 +1,7 @@
 # Build the React workbench first so the final image contains both frontend and backend.
 # PaddlePaddle's Linux CPU wheel is currently x86_64-only. Build the full
 # OCR-capable image for amd64; Docker Desktop uses emulation on Apple Silicon.
-FROM --platform=linux/amd64 node:22-bookworm-slim AS web-build
+FROM --platform=linux/amd64 node:26-bookworm-slim AS web-build
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
