@@ -1,4 +1,6 @@
-# ParseFlow v1.4.0 功能说明
+# ParseFlow v1.6.0 功能说明
+
+本次统一结果文件存储改造已完成本地实现与验证；版本为1.6.0，尚未生产部署或创建远端Release。历史任务保留读取兼容。
 
 ParseFlow 是一个面向单机或可信内网环境的异步文档解析平台。用户上传文件后，服务端选择合适的解析能力，任务在后台持久化执行，并通过统一的任务、结果和 artifact 接口提供进度与下载。
 
@@ -40,7 +42,11 @@ ParseFlow 是一个面向单机或可信内网环境的异步文档解析平台�
 
 ## 4. 结果与 Artifact
 
-- 结果通过任务详情返回，页面不会暴露源文件或服务器工作目录路径。
+- 新任务的完整结构化内容保存到 `result/document.json`，`result/manifest.json` 描述单元和数据块；任务详情仅返回有界 `document` 预览与 `result_ref`，不再承载完整正文。
+- 任务元数据继续使用JSON文件持久化，没有新增SQL任务仓库。相对存储引用和opaque ID用于访问，不接受任意本地路径，也不泄露绝对路径。
+- `GET /api/v1/tasks/{task_id}/result` 获取结果目录；`GET /api/v1/tasks/{task_id}/result/units/{unit_id}/records?offset=0&limit=100` 按单元读取记录。完整文档通过artifact下载。
+- 页面、幻灯片、块、表格等按Provider真实结构拆分；Word不强行按不可靠页码拆分，音视频仍只保存已有预处理结果。
+- 旧任务内嵌文档和旧Excel SQLite结果继续可读，不自动批量迁移。预览缩减与实际解析截断分别标记；仅预览缩减不意味着任务 `partial`。
 - Artifact 使用 `artifact_id` 管理，按任务进行受控下载：
   - `GET /api/v1/tasks/{task_id}/artifacts`
   - `GET /api/v1/tasks/{task_id}/artifacts/{artifact_id}`
@@ -86,12 +92,12 @@ Remote MCP 使用 opaque ID，不接受服务器路径。稳定工具包括：
 
 v1.2.0 在任务结果中增加可选的 `quality` 与 `provenance`：输入分类、页/表格/图片数量、截断状态、可靠来源置信度、Provider/fallback 链路和解析器信息。未知置信度保持 `null`，不会根据启发式结果伪造模型置信度。
 
-成功解析的文档自动生成受任务结果大小预算控制的导出产物：
+完整结果文件和可选导出使用独立预算。新任务的权威结构化数据不依赖任务预览，也不因可选导出超限而丢失；JSON、Markdown、纯文本和表格导出的完整性应以manifest及预览标记为准：
 
-- 文档：JSON、Markdown、纯文本；
-- 表格：CSV、JSON、Markdown，以及包含全部表格的多工作表 XLSX；
-- 所有文件使用 opaque artifact ID 下载，内部相对存储键不会出现在公开响应中；
-- Web 工作台展示输入分类、Provider 链路、截断状态和区分后的结果导出入口。
+- 完整文档：`result/document.json` 与单元数据块；任务详情中的正文/表格只是有界预览；
+- 可选导出：Markdown、纯文本以及格式适用的CSV/JSON/Markdown/XLSX，受独立导出预算约束；
+- 文件通过opaque artifact ID受控下载，完整结果访问使用任务与单元ID，公开响应不包含服务器绝对路径；
+- Web 工作台展示输入分类、Provider链路、实际截断状态，并区分预览与完整结果访问。
 
 ## 9. 任务工作台与浏览器质量门禁
 
@@ -122,7 +128,16 @@ v1.3.0 起，服务端任务 API 保持为唯一事实来源，并持续增强�
 - 后台清理会保守回收无任务记录的孤儿目录，并以 `STORAGE_ORPHAN_MIN_AGE_SECONDS` 作为安全阈值；
 - 公开文档与事件详情不再包含 `artifact_dir` 等服务器路径字段。
 
-## 10. 稳定契约
+## 10. Excel文件存储与容量边界（v1.6.0，本地验证完成）
+
+- 新Excel结果使用 `workbook/manifest.json` schema 2，按Sheet保存gzip JSONL块；共享字符串、样式及公式查询所需SQLite仅作为私有临时数据。
+- XLSX/XLSM行列坐标默认支持1,048,576行、16,384列（XFD），保持行列1-based与Sheet ID 0-based；稀疏数据不展开中间空白矩形。
+- 有效单元格总数仍默认10,000,000；文件大小、解压大小、XML大小、完整输出、分块、耗时和预览分别设预算。旧XLS受自身格式边界约束。
+- 保留既有Sheet行游标接口与旧SQLite读取；分页要么返回完整行，要么明确拒绝超大行，不静默漏格。
+- 巨大空白跨度的CSV导出有单独预算，完整坐标支持不意味着无条件生成巨大矩形文件。
+- 新格式千万级数值样本完整保存成功，约135秒、解析进程峰值约56MiB、压缩产物约50MiB；兼容与生命周期回归通过，条件与边界见 [验证记录](file-result-storage-validation-1.6.0.md)。
+
+## 11. 稳定契约
 
 v1.0.0 冻结 `/api/v1`、Remote MCP 工具、opaque ID 前缀和稳定任务状态。v1.x 可增加可选字段或能力，但不会移除/重命名公开 endpoint、稳定工具、必填响应字段、稳定状态、错误码或 ID 语义。
 

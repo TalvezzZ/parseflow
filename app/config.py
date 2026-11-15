@@ -45,8 +45,8 @@ class Settings(BaseSettings):
     excel_normal_provider: str = "excel.normal.openpyxl"
     excel_max_sheets: int = 30
     excel_max_semantic_cells: int = 10_000_000
-    excel_max_sheet_rows: int = 100000
-    excel_max_columns: int = 1000
+    excel_max_sheet_rows: int = Field(default=1_048_576, ge=1, le=1_048_576)
+    excel_max_columns: int = Field(default=16_384, ge=1, le=16_384)
     excel_max_file_size_mb: int = 100
     excel_max_uncompressed_size_mb: int = 500
     excel_max_zip_entries: int = 10000
@@ -64,6 +64,8 @@ class Settings(BaseSettings):
     task_shutdown_grace_seconds: int = Field(default=30, ge=0)
     task_shutdown_cancel_grace_seconds: int = Field(default=2, ge=0)
     task_max_result_size_mb: int = 20
+    result_max_storage_mb: int = Field(default=4096, ge=1)
+    result_preview_max_bytes: int = Field(default=262144, ge=16384, le=1048576)
     storage_min_free_mb: int = 1024
     storage_soft_free_mb: int = 2048
     storage_tmp_max_age_seconds: int = 86400

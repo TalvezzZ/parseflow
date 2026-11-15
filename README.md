@@ -4,13 +4,16 @@
 
 ParseFlow accepts a single file, automatically selects an appropriate parsing workflow, and presents text, tables, Markdown, structured JSON, and generated artifacts in a web workbench. The backend is built with FastAPI and pluggable Skills; the frontend is a React/Vite application.
 
+The working version is **1.6.0**, with unified result-file storage implemented and validated locally (backend 305 passed / 1 skipped; frontend 39 passed and production build passed). No GitHub release, tag, image publication, or production deployment was performed. The reserved [1.5.0 reliability plan](docs/plan-1.5.0.md) remains separate from the [1.6.0 storage plan](docs/plan-1.6.0.md).
+
 ## Highlights
 
 - **Automatic planning** — selects a registered Skill by file type; no model API key is required for the default rule-based workflow.
 - **Selectable parsing tiers** — leave the default on **智能默认**, choose **标准解析** for native/fast extraction, or **增强解析** for OCR-first PDFs/images and Office-to-PDF layout parsing.
 - **Multi-format parsing** — documents, Office files, structured text, spreadsheets, presentations, audio, and video.
 - **Structured results** — normalized document model with blocks, tables, images, Markdown, plain text, provenance, warnings, and artifacts.
-- **Safe spreadsheet handling** — XLSX/XLSM OOXML streams into a disk-backed SQLite store, with bounded previews, per-sheet row pagination, and killable parser/export workers.
+- **File-backed results** — complete structured results live in task-owned files; bounded task previews and stable result references keep task queries small across supported file types.
+- **Safe spreadsheet handling** — XLSX/XLSM OOXML streams into per-Sheet gzip chunks, with complete Excel coordinates, bounded previews, row pagination, and killable parser/export workers; legacy SQLite results remain readable.
 - **Local upload boundaries** — controlled local storage, file-size and extension limits, optional `X-API-Key` authentication, and task metrics.
 - **Developer integrations** — upload-only REST tasks, persistent polling, and opaque-ID MCP over local stdio or authenticated Streamable HTTP.
 
@@ -26,21 +29,36 @@ ParseFlow accepts a single file, automatically selects an appropriate parsing wo
 | Audio | MP3, WAV, M4A, AAC, FLAC, OGG | Metadata probing and audio normalization; no ASR yet |
 | Video | MP4, MOV, MKV, AVI, WEBM | Metadata probing, audio extraction, and embedded-subtitle export when available; no ASR yet |
 
+### Unified result-file storage (1.6.0)
+
+New task metadata remains JSON under `DATA_DIR`; this change does not introduce a SQL task repository. Complete parsed content is published into the controlled artifact workspace: `result/manifest.json` describes result units and chunks, and `result/document.json` retains the complete structured document. Pages, slides, content blocks, tables, or other provider-produced units have separate chunk files. Media workflows publish their existing preprocessing output only; this does not add ASR.
+
+The task result's `document` is a bounded preview, while `result_ref` identifies the file-backed result. Use the authenticated result endpoints to discover units and read records without retrieving the whole document:
+
+```http
+GET /api/v1/tasks/{task_id}/result
+GET /api/v1/tasks/{task_id}/result/units/{unit_id}/records?offset=0&limit=100
+```
+
+The complete structured document is downloadable using `result_ref.document_url` (`/api/v1/tasks/{task_id}/result/document`) or its opaque artifact ID. Manifest-listed resources, including full Excel chunks, have controlled `/result/files/{storage_key}` downloads. Task artifacts are limited to 100 preview entries; follow `result_ref.artifacts_url` with `offset`/`limit` for the remaining directory. Internal storage references use relative keys; callers cannot supply arbitrary server paths. New clients must not treat a task preview as the complete result. Preview truncation is distinct from source-data truncation: a complete file-backed parse may have a shortened preview without being `partial`. Existing tasks with embedded documents and legacy Excel SQLite artifacts remain readable; no automatic bulk rewrite or deletion is performed.
+
+Result files are staged before publication, and task references are recorded only after result publication. Backup, deletion, expiry, and orphan cleanup must cover task metadata and its entire artifact tree together. File-backed publication bounds persistent records and result responses; it does not automatically make every third-party parser internally streaming.
+
 ### Large Excel workbooks
 
-Standard Excel extraction streams worksheet XML in workbook relationship order and writes retained cells to `workbook.sqlite`. It does not load a complete openpyxl workbook or keep a global cell-coordinate set. Shared strings and other lookup data are disk-backed; formulas retain expressions and available cached values. Hidden and very-hidden sheets are excluded. VBA is not executed.
+Standard Excel extraction streams worksheet XML in workbook relationship order. New complete cell output uses `workbook/manifest.json` **schema 2**, separate Sheet directories, and gzip-compressed JSONL chunks. Shared strings and lookup data may use private temporary SQLite; auxiliary databases are not published as the final cell store. Formulas retain expressions and available cached values. Hidden and very-hidden sheets are excluded. VBA is not executed.
 
-Task JSON contains sheet summaries and bounded previews, not the full workbook. `tables[].cells` and `tables[].rows` are previews; consumers that previously assumed they contain every cell must use the row API or download the SQLite artifact. `quality.preview_truncated` is separate from actual source-data truncation (`quality.truncated` / task `partial`).
+Task `tables[].cells` and `tables[].rows` are previews. The retained row endpoint serves both new file-backed workbooks and old `workbook.sqlite` results:
 
 ```http
 GET /api/v1/tasks/{task_id}/sheets/{sheet_id}/rows?after_row=0&limit=100
 ```
 
-Sheet IDs are zero-based, while row/column coordinates retain Excel's one-based numbering. The response contains complete nonempty rows and a `next_after_row` cursor (or `null`). Advance using the returned cursor; byte-limited pages may contain fewer rows than requested. Pages are capped at 200 rows / approximately 1 MB of cell payload. A single oversized row returns HTTP 413 with download guidance, without silently omitting cells.
+Sheet IDs are zero-based, while row/column coordinates retain Excel's one-based numbering. Use `next_after_row`, rather than a fixed row increment; pages may be shortened by byte limits. A row exceeding the row-preview budget must be rejected explicitly rather than silently losing cells. Complete content remains available in the stored chunks and artifacts.
 
-Defaults: 10 million retained cells per workbook, 30 visible sheets, row numbers up to 100,000, column numbers up to 1,000, 100 MB input, 500 MB inflated archive, and 100 MB per worksheet XML. Full cells/images have a separate `EXCEL_MAX_STORAGE_MB=4096` disk budget. The preview is limited by `EXCEL_MAX_PREVIEW_CELLS=2000`, `EXCEL_MAX_PREVIEW_ROWS=100` (physical rows per sheet), and `EXCEL_MAX_PREVIEW_BYTES=1000000`; the byte reservation is conservative. XML records/text/tokens are additionally bounded at 4 MB and nesting at 128. Size and content budgets still apply independently: ten million arbitrary cells are not guaranteed to fit the default archive or disk limits.
+XLSX/XLSM coordinate defaults extend to **1,048,576 rows and 16,384 columns (XFD)**. Sparse far coordinates do not expand the intervening blank rectangle. The retained semantic-cell budget remains **10,000,000 per workbook**. Input size, inflated archive size, per-sheet XML size, complete output/storage size, chunk size/count, runtime, and preview budgets remain independent. Existing deployment overrides for `EXCEL_MAX_SHEET_ROWS` and `EXCEL_MAX_COLUMNS` continue to apply; review them during upgrade if full coordinates are desired. Full coordinate support is not a promise to process a fully populated 1,048,576 × 16,384 sheet.
 
-The SQLite artifact is the complete retained data source. Optional CSV exports stream real row/column gaps and escape formula-like text for spreadsheet safety. Text and Markdown exports are explicitly previews. `TASK_MAX_RESULT_SIZE_MB` bounds the optional aggregate exports; exceeding it does not discard the SQLite artifact. Cancellation/timeout stops Excel parser/export subprocesses. Run `PYTHONPATH=. .venv/bin/python scripts/benchmark_excel.py --cells 1000000 10000000` for reproducible numeric-fixture RSS, time, and disk measurements; shared-string-heavy workbooks have different performance characteristics.
+CSV generation preserves real coordinate gaps only within its separate export budget; sparse corner cells must not force unbounded blank output. Optional export limits do not delete the authoritative complete result. The earlier SQLite numeric benchmark in [the historical validation record](docs/excel-streaming-validation.md) is a separate baseline. New gzip-chunk numeric measurements retained ten million cells in about 135 seconds with ~56 MiB worker peak RSS and ~50 MiB compressed storage; see [v1.6.0 validation conditions](docs/file-result-storage-validation-1.6.0.md).
 
 ### Choose the standard PDF parser
 
@@ -287,6 +305,8 @@ Available tools are `list_skills`, `preview_parse_plan`, `submit_file_id`, `get_
 The active roadmap and detailed release plans are maintained in:
 
 - [`docs/roadmap.md`](docs/roadmap.md) — current baseline, confirmed architecture decisions, and release sequence;
+- [`docs/plan-1.6.0.md`](docs/plan-1.6.0.md) — unified file results and full Excel coordinates (locally implemented and validated);
+- [`CHANGELOG.md`](CHANGELOG.md) — unreleased changes and compatibility notes;
 - [`docs/plan-0.7.1.md`](docs/plan-0.7.1.md) — current capability cleanup;
 - [`docs/plan-0.8.0.md`](docs/plan-0.8.0.md) — upload-only asynchronous API and local file task persistence;
 - [`docs/plan-0.8.1.md`](docs/plan-0.8.1.md) — security and deployment hardening;

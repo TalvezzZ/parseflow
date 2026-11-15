@@ -29,12 +29,12 @@ class ExcelArchiveLimitError(ValueError):
 
 
 class OpenpyxlProvider(Provider):
-    """Stream OOXML into SQLite, retaining only bounded document previews."""
+    """Stream OOXML into per-sheet chunk files, retaining only bounded document previews."""
     manifest = ProviderManifest(name="excel.normal.openpyxl", version="0.5.0", kind="spreadsheet_parser", modes=["normal"],
         capabilities=["sheets", "sparse_cells", "formulas", "merged_cells", "tables", "images", "markdown", "used_range_hardening"])
 
     def __init__(self, max_sheets: int = 30, max_semantic_cells: int = 10_000_000,
-                 max_sheet_rows: int = 100_000, max_columns: int = 1_000,
+                 max_sheet_rows: int = 1_048_576, max_columns: int = 16_384,
                  max_file_size_mb: int = 100, max_uncompressed_size_mb: int = 500,
                  max_zip_entries: int = 10_000, max_sheet_xml_size_mb: int = 100,
                  max_preview_cells: int = 2000, max_preview_bytes: int = 1_000_000,
@@ -87,7 +87,7 @@ class OpenpyxlProvider(Provider):
             metadata_remaining -= size
             return True
 
-        with zipfile.ZipFile(source) as archive, ExcelStoreWriter(artifact_dir / "workbook.sqlite", max_bytes=self.max_storage_mb * 1024 * 1024) as store:
+        with zipfile.ZipFile(source) as archive, ExcelStoreWriter(artifact_dir / "workbook" / "manifest.json", max_bytes=self.max_storage_mb * 1024 * 1024) as store:
             db = store.connection
             db.executescript("""
                 CREATE TABLE x_strings (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
@@ -221,22 +221,52 @@ class OpenpyxlProvider(Provider):
                 db.commit()
                 has_metadata = bool(db.execute("SELECT 1 FROM x_metadata LIMIT 1").fetchone())
                 bounds = [self.max_sheet_rows + 1, self.max_columns + 1, 0, 0]
-                count = 0
+                count = row_count = 0
+                last_emitted_row = 0
+                cells, rows = [], []
 
                 def emit(cell):
-                    nonlocal count, total_cells, truncated
+                    nonlocal count, total_cells, truncated, row_count, last_emitted_row, preview_cells, preview_remaining
                     row, col = cell["row"], cell["column"]
                     if row < 1 or col < 1 or row > self.max_sheet_rows or col > self.max_columns or total_cells >= self.max_semantic_cells:
                         truncation_reasons.add("cell_limit" if total_cells >= self.max_semantic_cells else "row_or_column_limit")
                         truncated += 1
                         return
                     store.add_cell(sheet_id, cell)
+                    if row != last_emitted_row:
+                        row_count += 1
+                        last_emitted_row = row
+                    if row <= self.max_preview_rows and col <= 100 and preview_cells < self.max_preview_cells:
+                        payload = json.dumps(cell, ensure_ascii=False)
+                        slots = max(0, row - len(rows)) + max(0, col - (len(rows[row-1]) if row <= len(rows) else 0))
+                        cost = len(payload.encode()) * 8 + slots * 8 + 128
+                        if cost <= preview_remaining:
+                            preview_remaining -= cost
+                            preview_cells += 1
+                            cells.append(cell)
+                            while len(rows) < row:
+                                rows.append([])
+                            line = rows[row-1]
+                            line.extend([None] * (col - len(line)))
+                            line[col-1] = cell['value']
                     count += 1
                     total_cells += 1
                     bounds[0] = min(bounds[0], row)
                     bounds[1] = min(bounds[1], col)
                     bounds[2] = max(bounds[2], row)
                     bounds[3] = max(bounds[3], col)
+
+                # Metadata is capped at 1MB/10k entries. Merge it in coordinate
+                # order so blank comment/link cells never create out-of-order chunks.
+                metadata = iter(db.execute("SELECT row,col,payload FROM x_metadata ORDER BY row,col"))
+                pending_metadata = next(metadata, None)
+
+                def metadata_cell(item):
+                    row, col, payload = item
+                    cell = dict(coordinate=f"{get_column_letter(col)}{row}", row=row, column=col,
+                                value=None, formula=None, comment=None, hyperlink=None)
+                    cell.update(json.loads(payload))
+                    return cell
 
                 row_index = col_index = 0
                 last_parent = None
@@ -272,9 +302,13 @@ class OpenpyxlProvider(Provider):
                             origin = db.execute("SELECT origin,formula FROM x_formulas WHERE id=?", (shared_id,)).fetchone()
                             if origin:
                                 formula = Translator(origin[1], origin=origin[0]).translate_formula(coordinate)
-                    extra = db.execute("SELECT payload FROM x_metadata WHERE row=? AND col=?", (row, col)).fetchone() if has_metadata else None
-                    if extra:
-                        db.execute("DELETE FROM x_metadata WHERE row=? AND col=?", (row, col))
+                    while pending_metadata is not None and pending_metadata[:2] < (row, col):
+                        emit(metadata_cell(pending_metadata))
+                        pending_metadata = next(metadata, None)
+                    extra = None
+                    if pending_metadata is not None and pending_metadata[:2] == (row, col):
+                        extra = (pending_metadata[2],)
+                        pending_metadata = next(metadata, None)
                     if formula_node is None and text is None and not extra:
                         continue
                     value = typed_value(text, kind, node.get("s"))
@@ -286,37 +320,19 @@ class OpenpyxlProvider(Provider):
                     if extra:
                         cell.update(json.loads(extra[0]))
                     emit(cell)
-                for row, col, payload in db.execute("SELECT row,col,payload FROM x_metadata ORDER BY row,col"):
-                    cell = {"coordinate": f"{get_column_letter(col)}{row}", "row": row, "column": col,
-                            "value": None, "formula": None, "comment": None, "hyperlink": None}
-                    cell.update(json.loads(payload))
-                    emit(cell)
+                while pending_metadata is not None:
+                    emit(metadata_cell(pending_metadata))
+                    pending_metadata = next(metadata, None)
                 store.flush()
-                row_count = db.execute("SELECT COUNT(DISTINCT row) FROM cells WHERE sheet_id=?", (sheet_id,)).fetchone()[0]
                 dimension = f"{get_column_letter(bounds[1])}{bounds[0]}:{get_column_letter(bounds[3])}{bounds[2]}" if count else ""
                 if self._is_polluted_dimension(declared, dimension):
                     warnings.append(f"excel_used_range_polluted: 工作表 {name} 声明范围 {declared} 大于语义范围 {dimension}")
                 info.update(merged_ranges=merged, declared_dimension=declared, semantic_dimension=dimension,
                             semantic_cell_count=count, row_count=row_count)
-                cells, rows = [], []
-                for payload, in db.execute("SELECT payload FROM cells WHERE sheet_id=? AND row<=? ORDER BY row,column", (sheet_id, self.max_preview_rows)):
-                    cell = json.loads(payload)
-                    slots = max(0, cell["row"] - len(rows)) + max(0, cell["column"] - (len(rows[cell["row"]-1]) if cell["row"] <= len(rows) else 0))
-                    cost = len(payload.encode()) * 8 + slots * 8 + 128
-                    if preview_cells >= self.max_preview_cells or cost > preview_remaining:
-                        break
-                    preview_remaining -= cost
-                    preview_cells += 1
-                    cells.append(cell)
-                    while len(rows) < cell["row"]:
-                        rows.append([])
-                    line = rows[cell["row"]-1]
-                    line.extend([None] * (cell["column"] - len(line)))
-                    line[cell["column"]-1] = cell["value"]
                 info["preview_truncated"] = len(cells) < count
                 store.update_sheet(sheet_id, info)
                 sheets.append(info)
-                tables.append(dict(info, range=dimension, declared_range=declared, cells=cells, rows=rows, data_ref="workbook.sqlite"))
+                tables.append(dict(info, range=dimension, declared_range=declared, cells=cells, rows=rows, data_ref="workbook/manifest.json"))
                 if cells:
                     blocks.append(DocumentBlock(kind="heading", text=name, metadata={"sheet": name, "sheet_id": sheet_id}))
                     lines = []
@@ -348,7 +364,7 @@ class OpenpyxlProvider(Provider):
                             if not metadata_accept(item):
                                 continue
                             image_bytes += archive.getinfo(media["target"]).file_size
-                            database_bytes = db.execute("PRAGMA page_count").fetchone()[0] * 4096
+                            database_bytes = store.stored_bytes + db.execute("PRAGMA page_count").fetchone()[0] * 4096
                             if image_bytes + database_bytes > self.max_storage_mb * 1024 * 1024:
                                 raise ValueError("Excel 数据和图片存储超过磁盘预算")
                             (artifact_dir / "images").mkdir(exist_ok=True)
@@ -359,7 +375,7 @@ class OpenpyxlProvider(Provider):
             for table_name in ("x_strings", "x_formats", "x_styles", "x_formulas", "x_metadata"):
                 db.execute(f"DROP TABLE {table_name}")
             store.flush()
-            if db.execute("PRAGMA page_count").fetchone()[0] * 4096 + image_bytes > self.max_storage_mb * 1024 * 1024:
+            if store.stored_bytes + db.execute("PRAGMA page_count").fetchone()[0] * 4096 + image_bytes > self.max_storage_mb * 1024 * 1024:
                 raise ValueError("Excel 数据和图片存储超过磁盘预算")
             store.finish()
         if not total_cells and not images:
@@ -369,7 +385,7 @@ class OpenpyxlProvider(Provider):
         document = DocumentResult(document_id=context.file.file_id, source_file=context.file, document_type="xlsx",
             blocks=blocks, tables=tables, images=images,
             representations={"plain_text": "\n".join(block.text for block in blocks if block.text), "markdown": "\n\n".join(markdown)},
-            metadata={"artifact_dir": str(artifact_dir), "sheet_count": len(sheets), "archive": scan["archive"], "excel_storage": {"filename": "workbook.sqlite", "schema_version": 1}, "sheets": sheets},
+            metadata={"artifact_dir": str(artifact_dir), "sheet_count": len(sheets), "archive": scan["archive"], "excel_storage": {"filename": "workbook/manifest.json", "schema_version": 2}, "sheets": sheets},
             parser={"name": self.manifest.name, "version": self.manifest.version}, warnings=warnings,
             quality={"sheets": len(sheets), "semantic_cells": total_cells, "tables": len(tables), "images": len(images), "truncated": int(truncated), "truncation_reason": ",".join(sorted(truncation_reasons)), "preview_truncated": int(any(sheet["preview_truncated"] for sheet in sheets))},
             provenance={"sheets": sheets}, extensions={"workbook": {"sheets": sheets}})

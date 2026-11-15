@@ -15,7 +15,7 @@ from openpyxl.comments import Comment
 
 from app.documents.models import FileInput, ParseContext
 from app.skills.excel.adapters.openpyxl import OpenpyxlProvider
-from app.skills.excel.store import read_sheet_page
+from app.skills.excel.store import read_sheet_page, iter_sheet_cells
 
 
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -38,9 +38,7 @@ def replace_zip(source: Path, changes: dict[str, bytes]) -> None:
 
 
 def full_cells(output: Path, sheet_id: int = 0) -> list[dict]:
-    with closing(sqlite3.connect(output / "workbook.sqlite")) as connection:
-        return [json.loads(row[0]) for row in connection.execute(
-            "SELECT payload FROM cells WHERE sheet_id=? ORDER BY row,column", (sheet_id,))]
+    return list(iter_sheet_cells(output / "workbook/manifest.json", sheet_id))
 
 
 def test_streaming_values_dates_formulas_metadata_and_preview(tmp_path: Path) -> None:
@@ -116,7 +114,7 @@ def test_sparse_and_style_pollution_does_not_expand_rectangles(tmp_path: Path) -
     result = OpenpyxlProvider()._parse_sync(context(source, output))
     assert result.status == "success", result.error
     assert len(full_cells(output)) == 2
-    assert read_sheet_page(output / "workbook.sqlite", 0, limit=1)["next_after_row"] == 1
+    assert read_sheet_page(output / "workbook/manifest.json", 0, limit=1)["next_after_row"] == 1
 
 
 def test_limits_and_hidden_sheets_are_applied_before_cell_loading(tmp_path: Path) -> None:
@@ -170,7 +168,7 @@ async def test_worker_publishes_only_complete_outputs(tmp_path: Path) -> None:
     output = tmp_path / "out"
     result = await OpenpyxlProvider().parse(context(source, output))
     assert result.status == "success", result.error
-    assert (output / "workbook.sqlite").is_file()
+    assert (output / "workbook/manifest.json").is_file()
     assert "worker_peak_rss_bytes" in result.metrics
     assert not list(tmp_path.glob(".excel-worker-*"))
     assert not (output / "request.json").exists()
@@ -226,4 +224,4 @@ async def test_worker_honors_cancel_marker(tmp_path: Path, monkeypatch) -> None:
     result = await asyncio.wait_for(task, timeout=3)
     assert result.status == "failed" and result.error.code == "task_cancelled"
     assert child.returncode is not None
-    assert not (tmp_path / "out" / "workbook.sqlite").exists()
+    assert not (tmp_path / "out" / "workbook/manifest.json").exists()

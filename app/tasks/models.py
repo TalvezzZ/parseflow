@@ -22,6 +22,7 @@ class TaskResultEnvelope(BaseModel):
     status: Literal["succeeded", "partial", "failed"]
     file_id: str
     document: dict[str, Any] | None = None
+    result_ref: dict[str, Any] | None = None
     artifacts: list[dict[str, Any]] = Field(default_factory=list)
     steps: list[dict[str, Any]] = Field(default_factory=list)
     conversion: dict[str, Any] | None = None
@@ -101,6 +102,7 @@ class ArtifactRecord(BaseModel):
 class ArtifactListResponse(BaseModel):
     task_id: str
     artifacts: list[ArtifactRecord]
+    next_offset: int | None = None
 
 
 TERMINAL_STATUSES = {"succeeded", "partial", "failed", "cancelled", "interrupted"}

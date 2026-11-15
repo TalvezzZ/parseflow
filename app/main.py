@@ -37,6 +37,10 @@ from app.tasks.repository import FileTaskRepository
 from app.tasks.retention import TaskStorageReclaimer
 from app.skills.excel.store import ExcelPageTooLarge, read_sheet_page
 from app.skills.excel.process import export_in_worker, remove_excel_outputs
+from app.tasks.result_store import (ResultStorageError, ResultPageTooLarge, ResultWriteCancelled,
+    publish_result_async, load_result_manifest, read_unit_records, resolve_result_resource,
+    safe_result_path, remove_file_result)
+from app.tasks.result_routes import result_router
 from app.version import __version__
 
 settings = get_settings()
@@ -218,15 +222,12 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     cancel_path = workspace.parent / ".excel-cancel"
     if document:
         try:
-            if disk_excel:
-                export_status = await export_in_worker(document, workspace,
-                    max_bytes=settings.task_max_result_size_mb * 1024 * 1024, cancel_path=cancel_path)
-                if export_status == "limit":
-                    warnings.append("结果导出超过大小限制，完整 Excel 数据仍可下载")
-                elif export_status == "failed":
-                    warnings.append("结果导出生成失败，完整 Excel 数据仍可下载")
-            else:
-                await asyncio.to_thread(generate_document_exports, document, workspace, max_bytes=settings.task_max_result_size_mb * 1024 * 1024)
+            export_status = await export_in_worker(document, workspace,
+                max_bytes=settings.task_max_result_size_mb * 1024 * 1024, cancel_path=cancel_path)
+            if export_status == "limit":
+                warnings.append("可选导出超过大小限制，完整解析结果仍可下载")
+            elif export_status == "failed":
+                warnings.append("可选导出生成失败，完整解析结果仍可下载")
         except asyncio.CancelledError:
             if disk_excel:
                 remove_excel_outputs(workspace)
@@ -240,15 +241,53 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
         document = None
         result["status"] = "failed"
         result["error"] = {"code": "task_cancelled", "message": "Excel 解析已取消", "retryable": False}
+    result_ref = None
+    full_quality, full_provenance = _quality_report(document, warnings)
+    # Conversion/media payloads have no DocumentResult but still require durable full output.
+    extra_payload = _public_document({key: value for key, value in payload.items() if key != "document"}) if isinstance(payload, dict) else {}
+    if result["status"] in {"success", "partial"} and (document is not None or extra_payload):
+        try:
+            document, result_ref = await publish_result_async(workspace, document, payload=extra_payload or None,
+                max_bytes=settings.result_max_storage_mb * 1024 * 1024,
+                preview_bytes=settings.result_preview_max_bytes, cancel_path=cancel_path)
+            base = f"/api/v1/tasks/{record.task_id}/result"
+            result_ref.update(manifest_url=base, document_url=base + "/document")
+        except ResultWriteCancelled:
+            remove_file_result(workspace)
+            remove_excel_outputs(workspace)
+            document = None
+            result["status"] = "failed"
+            result["error"] = {"code": "task_cancelled", "message": "结果写入已取消", "retryable": False}
+        except ResultStorageError as exc:
+            remove_file_result(workspace)
+            document = None
+            result["status"] = "failed"
+            result["error"] = {"code": "result_storage_failed", "message": str(exc), "retryable": False}
+    if cancel_path.exists():
+        remove_file_result(workspace)
+        remove_excel_outputs(workspace)
+        result_ref, document = None, None
+        result["status"] = "failed"
+        result["error"] = {"code": "task_cancelled", "message": "任务已取消", "retryable": False}
+    if result["status"] == "failed" and result_ref is None:
+        import shutil
+        task_files = workspace.resolve()
+        expected_root = artifact_repository.root.resolve() / record.task_id
+        if task_files.parent == expected_root and task_files.name == "files" and not workspace.is_symlink():
+            shutil.rmtree(task_files, ignore_errors=True)
+            workspace.mkdir(parents=True, exist_ok=True)
     artifacts = artifact_repository.collect(record.task_id)
-    for artifact in artifacts:
+    if result_ref is not None:
+        result_ref["artifact_count"] = len(artifacts)
+        result_ref["artifacts_url"] = f"/api/v1/tasks/{record.task_id}/artifacts"
+    for artifact in artifacts[:100]:
         await task_manager.events.append(record.task_id, "artifact.created", message="解析产物已生成",
                                          details={"artifact_id": artifact.artifact_id, "kind": artifact.kind,
                                                   "size_bytes": artifact.size_bytes})
-    public_artifacts = [item.model_dump(mode="json") | {"download_url": f"/api/v1/tasks/{record.task_id}/artifacts/{item.artifact_id}"} for item in artifacts]
+    public_artifacts = [item.model_dump(mode="json") | {"download_url": f"/api/v1/tasks/{record.task_id}/artifacts/{item.artifact_id}"} for item in artifacts[:100]]
     status = "succeeded" if result["status"] == "success" else "partial" if result["status"] == "partial" else "failed"
-    quality, provenance = _quality_report(document, warnings)
-    return TaskResultEnvelope(status=status, file_id=record.file_id, document=document, artifacts=public_artifacts,
+    quality, provenance = full_quality, full_provenance
+    return TaskResultEnvelope(status=status, file_id=record.file_id, document=document, result_ref=result_ref, artifacts=public_artifacts,
                               steps=[step.model_dump(mode="json")], warnings=warnings,
                               metrics=dict(result.get("metrics") or {}), quality=quality, provenance=provenance,
                               error=result.get("error"))
@@ -282,6 +321,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Parse Agent", version=__version__, description="基于 LangChain 和 Skill 的文档解析 Agent", lifespan=lifespan)
+app.include_router(result_router(task_manager, artifact_repository))
 app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"], allow_credentials=False, allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["*"])
 
 
@@ -429,10 +469,10 @@ async def get_excel_sheet_rows(task_id: str, sheet_id: int = ApiPath(ge=0, le=2*
         raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": "未找到任务"})
     document = task.result.document if task.result else None
     storage = ((document or {}).get("metadata") or {}).get("excel_storage")
-    if task.status not in {"succeeded", "partial"} or not isinstance(storage, dict) or storage.get("filename") != "workbook.sqlite":
+    if task.status not in {"succeeded", "partial"} or not isinstance(storage, dict) or storage.get("filename") not in {"workbook.sqlite", "workbook/manifest.json"}:
         raise HTTPException(status_code=404, detail={"code": "excel_data_not_found", "message": "此任务没有可分页的 Excel 数据"})
     try:
-        return await asyncio.to_thread(read_sheet_page, artifact_repository.workspace(task_id) / "workbook.sqlite",
+        return await asyncio.to_thread(read_sheet_page, safe_result_path(artifact_repository.workspace(task_id), storage["filename"]),
                                        sheet_id, after_row=after_row, limit=limit)
     except (KeyError, FileNotFoundError):
         raise HTTPException(status_code=404, detail={"code": "excel_sheet_not_found", "message": "未找到工作表数据"}) from None
@@ -480,10 +520,13 @@ async def delete_task(task_id: str) -> None:
 
 
 @app.get("/api/v1/tasks/{task_id}/artifacts", response_model=ArtifactListResponse, tags=["任务"])
-async def list_artifacts(task_id: str) -> ArtifactListResponse:
+async def list_artifacts(task_id: str, offset: int = Query(default=0, ge=0, le=2**63-1),
+                         limit: int = Query(default=100, ge=1, le=500)) -> ArtifactListResponse:
     if await task_manager.get(task_id) is None:
         raise HTTPException(status_code=404, detail={"code": "task_not_found", "message": "未找到任务"})
-    return ArtifactListResponse(task_id=task_id, artifacts=artifact_repository.list(task_id))
+    items = await asyncio.to_thread(artifact_repository.list, task_id)
+    end = offset + limit
+    return ArtifactListResponse(task_id=task_id, artifacts=items[offset:end], next_offset=end if end < len(items) else None)
 
 
 @app.get("/api/v1/tasks/{task_id}/artifacts/{artifact_id}", tags=["任务"])

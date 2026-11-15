@@ -28,7 +28,16 @@ class ArtifactRepository:
         artifacts: list[ArtifactRecord] = []
         manifest_items: list[dict] = []
         for path in sorted(workspace.rglob("*")):
-            if not path.is_file() or path.is_symlink():
+            relative = path.relative_to(workspace)
+            if any(part.startswith(".") for part in relative.parts):
+                continue
+            # Internal chunks are exposed through manifest-authorized result routes,
+            # never expanded into thousands of task artifact records.
+            if relative.parts[0] == "result" and ("units" in relative.parts or path.name == "payload.json"):
+                continue
+            if relative.parts[0] == "workbook" and "chunks" in relative.parts:
+                continue
+            if not path.is_file() or path.is_symlink() or any(parent.is_symlink() for parent in path.parents if parent != workspace.parent):
                 continue
             item = ArtifactRecord(
                 artifact_id=new_id("artifact"), filename=path.name,

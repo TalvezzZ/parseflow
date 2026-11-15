@@ -49,18 +49,18 @@ def generate_document_exports(document: dict[str, Any], workspace: Path, *, max_
         plain_text = str(representations.get("plain_text") or "")
         markdown = str(representations.get("markdown") or plain_text)
         excel_storage = document.get("metadata", {}).get("excel_storage") if isinstance(document.get("metadata"), dict) else None
-        disk_workbook = (workspace / "workbook.sqlite") if isinstance(excel_storage, dict) and excel_storage.get("filename") == "workbook.sqlite" else None
+        disk_workbook = (workspace / excel_storage["filename"]) if isinstance(excel_storage, dict) and excel_storage.get("filename") in {"workbook.sqlite", "workbook/manifest.json"} else None
         if disk_workbook is not None and disk_workbook.is_file():
             add_text("document.txt", "Workbook preview (not the full workbook)\n" + plain_text if plain_text else "")
             add_text("document.md", "# Workbook preview (not the full workbook)\n\n" + markdown if markdown else "")
-            # The SQLite database, not the in-memory table previews, is the primary artifact.
+            # The disk-backed workbook, not the in-memory table previews, is authoritative.
             summary = {key: value for key, value in document.items() if key not in {"tables", "representations"}}
-            summary["excel_export"] = {"source": "workbook.sqlite", "csv": "complete per-sheet data",
+            summary["excel_export"] = {"source": excel_storage["filename"], "csv": "complete per-sheet data",
                                        "document.txt": "preview", "document.md": "preview"}
             add_json("document.json", summary)
-            for sheet_id in _sqlite_sheet_ids(disk_workbook):
+            for sheet_id in _workbook_sheet_ids(disk_workbook):
                 csv_path = staging / f"sheet-{sheet_id:03d}.csv"
-                used += _sqlite_csv_export(disk_workbook, sheet_id, csv_path, max_bytes - used)
+                used += (_chunk_csv_export if disk_workbook.suffix == ".json" else _sqlite_csv_export)(disk_workbook, sheet_id, csv_path, max_bytes - used)
                 outputs.append(csv_path)
         else:
             add_text("document.txt", plain_text)
@@ -105,16 +105,41 @@ def _sqlite_cell_value(payload: str) -> Any:
     return value if value is not None else cell.get("formula")
 
 
+def _workbook_sheet_ids(path: Path):
+    if path.suffix == '.json':
+        from app.skills.excel.store import load_workbook_manifest
+        yield from (sheet['sheet_id'] for sheet in load_workbook_manifest(path)['sheets'])
+    else:
+        yield from _sqlite_sheet_ids(path)
+
+
+def _chunk_csv_export(path: Path, sheet_id: int, output: Path, remaining_bytes: int) -> int:
+    from app.skills.excel.store import load_workbook_manifest, iter_sheet_cells
+    from openpyxl.utils.cell import range_boundaries
+    sheet = next(item for item in load_workbook_manifest(path)['sheets'] if item['sheet_id'] == sheet_id)
+    dimension = sheet['metadata'].get('semantic_dimension')
+    if not dimension:
+        return _write_excel_csv(output, remaining_bytes, None, None, None, ())
+    first_column, first_row, last_column, _ = range_boundaries(dimension)
+    records = ((cell['row'], cell['column'], json.dumps(cell, ensure_ascii=False)) for cell in iter_sheet_cells(path, sheet_id))
+    return _write_excel_csv(output, remaining_bytes, first_row, first_column, last_column, records)
+
+
 def _sqlite_csv_export(path: Path, sheet_id: int, output: Path, remaining_bytes: int) -> int:
-    """Stream the complete sheet and sparse coordinate gaps without buffering rows."""
-    if remaining_bytes < 3:
-        raise ExportLimitExceeded("combined exports exceed configured bytes")
-    written = 3
-    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as connection, output.open("wb") as handle:
-        handle.write(b"\xef\xbb\xbf")
+    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as connection:
         first_row, first_column, last_column = connection.execute(
             "SELECT MIN(row), MIN(column), MAX(column) FROM cells WHERE sheet_id = ?", (sheet_id,)
         ).fetchone()
+        records = connection.execute("SELECT row, column, payload FROM cells WHERE sheet_id = ? ORDER BY row, column", (sheet_id,))
+        return _write_excel_csv(output, remaining_bytes, first_row, first_column, last_column, records)
+
+
+def _write_excel_csv(output, remaining_bytes, first_row, first_column, last_column, records):
+    if remaining_bytes < 3:
+        raise ExportLimitExceeded("combined exports exceed configured bytes")
+    written = 3
+    with output.open('wb') as handle:
+        handle.write(b"\xef\xbb\xbf")
         if first_row is None:
             return written
         # Cell coordinates use Excel's one-based row and column numbering.
@@ -165,9 +190,7 @@ def _sqlite_csv_export(path: Path, sheet_id: int, output: Path, remaining_bytes:
 
         current_row: int | None = None
         previous_column = 0
-        for row_index, column_index, payload in connection.execute(
-            "SELECT row, column, payload FROM cells WHERE sheet_id = ? ORDER BY row, column", (sheet_id,)
-        ):
+        for row_index, column_index, payload in records:
             if row_index != current_row:
                 if current_row is not None:
                     emit_bytes(b"," * (width - previous_column) + b"\r\n")

@@ -21,6 +21,20 @@ The backend suite covers:
 - persistent automatic task planning/execution, queue capacity, cancellation, restart recovery, expiry cleanup, metrics, and normalized task result contracts;
 - Excel sparse-range hardening and legacy Office conversion where local LibreOffice is available.
 
+## 1.6.0 result-file storage acceptance
+
+Local validation on 2026-11-15: backend `305 passed, 1 skipped`; frontend `39 passed` and production build passed. Version/OpenAPI contract checks are included. Built-asset/mock-API Chromium smoke covered desktop/mobile and lazy unit reads; final artifact pagination was unit/build checked. Numeric 10-million-cell file-format benchmarks completed. See [measured conditions](file-result-storage-validation-1.6.0.md). Docker, production deployment and a new real-OCR browser E2E run were not performed in this iteration. The checklist below remains useful for deployment acceptance; historical SQLite measurements are separate.
+
+- For PDF, Word/RTF, PPT, images, text/structured formats, CSV/TSV, Excel, and existing audio/video preprocessing, verify complete content is retained in task-owned result files while task JSON contains only bounded previews and a stable `result_ref`.
+- Validate `result/manifest.json`, complete `result/document.json`, unit/chunk metadata, relative references, sizes and checksums. Verify `GET /api/v1/tasks/{id}/result`, unit record pagination (`offset`/`limit`), and complete document artifact downloads agree.
+- Increase complete content while keeping preview settings fixed; compare serialized task-record and task-list sizes, peak memory, disk use and latency. Do not infer parser-internal streaming from file-backed publication alone.
+- Verify legacy embedded documents and legacy `workbook.sqlite` results remain readable beside new tasks, with no destructive bulk migration.
+- Verify new Excel `workbook/manifest.json` schema 2 and per-Sheet gzip chunks preserve formulas/cached values, types, comments, hyperlinks, merges and images. Check `A1048576`, `XFD1` and `XFD1048576` without blank-rectangle expansion.
+- Exercise independent input, inflation, XML, semantic-cell, complete-output, chunk/file-count, preview and export budgets. Full Excel coordinates do not remove the default 10-million effective-cell budget. Oversized rows must fail explicitly rather than silently omit cells.
+- Test cancellation, timeout, crash/restart, task deletion, TTL and orphan cleanup at each file publication stage. A successful task reference must never point to an incomplete manifest; optional export failure must not erase the complete result.
+- Validate path traversal/symlink rejection, unknown unit IDs, missing/corrupted chunks and authenticated downloads. The metadata repository remains local task JSON, not SQL.
+- Re-run backend tests, frontend unit tests/build, contract snapshots and representative browser checks after integration. Record actual executed commands/results separately; no new GitHub release, push or production deployment is implied.
+
 ## Optional local OCR smoke test
 
 The mock-based OCR tests run in the default suite. To validate real local OCR and first-use model download, install the optional dependencies:

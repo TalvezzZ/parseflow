@@ -84,7 +84,20 @@ async def test_excel_task_upload_pagination_and_complete_csv() -> None:
             csv = next(item for item in artifacts if item["filename"] == "sheet-000.csv")
             data = await client.get(csv["download_url"])
             assert "完整数据末行,,999" in data.content.decode("utf-8-sig")
-            assert any(item["filename"] == "workbook.sqlite" for item in artifacts)
+            assert not any(item["filename"] == "workbook.sqlite" for item in artifacts)
+            reference = task["result"]["result_ref"]
+            manifest_response = await client.get(reference["manifest_url"])
+            assert manifest_response.status_code == 200, manifest_response.text
+            manifest = manifest_response.json()
+            assert manifest["workbook"]["schema_version"] == 2
+            chunk = manifest["workbook"]["sheets"][0]["chunks"][0]
+            chunk_response = await client.get(chunk["download_url"])
+            assert chunk_response.status_code == 200
+            import gzip, json
+            cells = [json.loads(line) for line in gzip.decompress(chunk_response.content).splitlines()]
+            assert cells[-1]["value"] == 999
+            full_document = await client.get(reference["document_url"])
+            assert full_document.json()["metadata"]["excel_storage"]["schema_version"] == 2
             assert "request.json" not in str(artifacts)
         finally:
             if task_id:

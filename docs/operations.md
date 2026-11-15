@@ -19,6 +19,28 @@ PARSEFLOW_STOP_GRACE_PERIOD=45s
 
 Docker 停止宽限期应大于任务完成宽限期与取消清理宽限期之和，并额外留出至少 10 秒给 API 与容器进程退出。服务启动时会独占锁定 `DATA_DIR`；如果另一进程已使用同一目录，启动会失败。不要删除活动服务的数据目录中的 `.parseflow.lock` 文件。
 
+## 1.6.0结果文件布局与升级（本地验证完成，待目标环境部署）
+
+任务元数据继续保存在 `data/tasks/{task_id}.json`，没有引入SQL任务仓库。新任务的完整结果存放在该任务既有artifact workspace内：
+
+```text
+result/manifest.json       统一结果目录、单元与块引用
+result/document.json       完整结构化文档
+result/...                 单元数据块与结果表示
+workbook/manifest.json     新Excel工作簿目录，schema 2
+workbook/...               按Sheet保存的gzip JSONL块
+```
+
+实际相对文件位置以manifest为准，不允许客户端传入任意服务器路径。任务JSON中的 `document` 是有界预览，`result_ref` 用于定位完整结果；`GET /api/v1/tasks/{id}/result` 与 `/result/units/{unit_id}/records?offset=0&limit=100` 提供目录/分段读取，完整文档通过 `/result/document` 或artifact受鉴权下载，manifest登记资源通过 `/result/files/{storage_key}` 获取。任务内嵌产物仅前100项，其余使用 `/artifacts?offset=100&limit=100` 及返回的next_offset读取。任务历史与轮询不应自动读取完整文件。PDF/Word/PPT等Provider内部可能仍构造完整文档，文件发布并不构成对第三方解析器内存的保证。
+
+升级时保留整个数据目录。旧任务的内嵌文档和旧Excel `workbook.sqlite`继续兼容读取，不要求先做批量迁移，不应删除旧结果数据库。新格式Excel辅助SQLite只能留在私有临时目录，不能作为最终结果或公开下载产物。
+
+容量规划分开考虑：上传大小、ZIP解压和XML预算、有效单元格数量、完整输出字节、块大小/文件数、预览字节、可选导出字节及任务耗时。XLSX/XLSM默认允许1,048,576行、16,384列，但有效单元格默认仍为10,000,000；已有行列环境覆盖不会自动消失，升级时应检查。稀疏远端坐标不应展开为空白矩形，导出仍有独立限制。文件存储降低元数据压力，也会增加磁盘吞吐、容量与inode需求；避免盲目增加并发或把文件数当作无限资源。
+
+结果发布遵循先完成临时数据及manifest、再原子发布文件、最后发布任务引用。异常排查需同时核对任务状态、引用、manifest和数据块，不能仅因目录存在就将任务改为成功。缺失或损坏结果应保留错误并显式重试；不要手工把未完成块拼接为可下载成功结果。删除/TTL/孤儿清理沿用任务artifact根目录，需覆盖新result/workbook子树。
+
+本地回归及新格式性能测试已完成，见 [验证记录](file-result-storage-validation-1.6.0.md)；目标环境部署、Docker构建和生产数据恢复演练仍需在发布流程执行。
+
 ## 健康检查与指标
 
 - `GET /health`：进程存活，不代表任务 Worker 一定可用。
@@ -59,9 +81,9 @@ docker compose up -d
 
 ## 备份与恢复
 
-停服或对数据卷做一致性快照后，备份整个 `DATA_DIR`，至少包含上传文件、任务 JSON、任务事件和 artifacts。OCR 模型缓存卷可单独备份；不备份时，首次 OCR 处理可能需要重新获取模型。
+停服或对数据卷做一致性快照后，备份整个 `DATA_DIR`，至少包含上传文件、任务JSON、任务事件和artifacts。1.6.0中完整内容在result/workbook文件树，只有任务JSON备份无法恢复结果；manifest、数据块、图片和旧SQLite都应随原目录结构保存。OCR模型缓存卷可单独备份；不备份时，首次OCR处理可能需要重新获取模型。
 
-恢复时先恢复到隔离的新数据卷，使用**一个**服务进程启动，确认 `/ready` 正常、队列恢复结果符合预期并能下载既有 artifact，再切回生产流量。定期演练恢复，不要只验证备份文件存在。
+恢复时先恢复到隔离的新数据卷，使用**一个**服务进程启动，确认 `/ready` 正常、队列恢复结果符合预期，并分别验证旧内嵌/SQLite任务、新结果目录、单元分页和完整artifact下载，再切回生产流量。检查manifest引用与校验值，定期演练恢复，不要只验证备份文件存在。
 
 ## 容量验证
 

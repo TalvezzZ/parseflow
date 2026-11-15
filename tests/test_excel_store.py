@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.skills.excel.store import ExcelPageTooLarge, ExcelStorageLimitError, ExcelStoreWriter, open_excel_store, read_sheet_page
+from app.skills.excel.store import ExcelPageTooLarge, ExcelStorageLimitError, LegacyExcelStoreWriter as ExcelStoreWriter, open_excel_store, read_sheet_page
 
 
 def cell(row: int, column: int = 1, value: object = "value") -> dict:

@@ -3,11 +3,17 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 import './dashboard.css'
 import { ApiError, api, errorMessage } from './api'
+import { version as appVersion } from '../package.json'
 
 type Json = Record<string, unknown>
 type TaskStatus = 'queued' | 'planning' | 'running' | 'cancelling' | 'succeeded' | 'partial' | 'failed' | 'cancelled' | 'interrupted'
 type Artifact = { artifact_id: string; filename: string; content_type?: string; size_bytes?: number; kind?: string; download_url?: string }
-type TaskResult = { status: 'succeeded' | 'partial' | 'failed'; document?: Json; artifacts: Artifact[]; steps: Json[]; conversion?: Json; warnings: string[]; metrics: Json; quality?: Json; provenance?: Json; error?: Json }
+type ResultRef = { schema_version: 1; storage_key: 'result/manifest.json'; manifest_url: string; document_url: string; preview_truncated: boolean; artifact_count?: number; artifacts_url?: string }
+type ResultUnit = { unit_id: string; kind: string; label: string; record_count: number }
+type ResultManifest = { schema_version: number; document_type: string; units: ResultUnit[] }
+type ResultRecords = { unit_id: string; records: unknown[]; next_offset: number | null }
+function storedSpreadsheet(table: Json) { return table.data_ref === 'workbook.sqlite' || table.data_ref === 'workbook/manifest.json' }
+type TaskResult = { result_ref?: ResultRef; status: 'succeeded' | 'partial' | 'failed'; document?: Json; artifacts: Artifact[]; steps: Json[]; conversion?: Json; warnings: string[]; metrics: Json; quality?: Json; provenance?: Json; error?: Json }
 export type ParseMode = 'auto' | 'standard' | 'enhanced'
 const parseModeOptions: { value: ParseMode; label: string; hint: string; glyph: string }[] = [
   { value: 'auto', label: '智能默认', hint: '自动选择最佳路径', glyph: '⌁' },
@@ -188,7 +194,7 @@ export function App() {
   const loadMore = async () => { if (!nextCursor) return; const generation = listRequestRef.current; try { const payload = await api<{ items: Task[]; next_cursor?: string }>(taskQuery(filters, nextCursor)); if (generation === listRequestRef.current) { setRecent((items) => [...items, ...payload.items.filter((item) => !items.some((existing) => existing.task_id === item.task_id))]); setNextCursor(payload.next_cursor) } } catch (err) { if (generation === listRequestRef.current) { setError(errorMessage(err)); setStale(true) } } }
 
   return <main className="app-shell">
-    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · 1.4.0</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className={`service ${stale ? 'stale' : ''}`} role="status"><i /> {stale ? '连接中断 · 数据可能已过期' : '服务就绪'}</span></header>
+    <header className="app-header"><span className="brand-mark" aria-hidden="true">✦</span><div><p className="eyebrow">PARSEFLOW · {appVersion}</p><h1>智能文档工作台</h1><p className="subtitle">上传一个文件，系统会自动规划并执行合适的解析流程。</p></div><span className={`service ${stale ? 'stale' : ''}`} role="status"><i /> {stale ? '连接中断 · 数据可能已过期' : '服务就绪'}</span></header>
     <section className={`workspace-grid ${task ? 'task-active' : ''}`}>
       <aside className="upload-panel"><h2>开始解析</h2><form onSubmit={submit}>
         <div className="dropzone" role="button" tabIndex={0} aria-label="选择要解析的文件" onDrop={onDrop} onDragOver={(event) => event.preventDefault()} onClick={openFilePicker} onKeyDown={onDropzoneKeyDown}>
@@ -283,6 +289,7 @@ export function TaskCenter({ recent, open, filters, setFilters, nextCursor, load
 
 export function TaskView({ task, headingRef, events, document, fileId, plans, tables, representations, artifacts, activeTab, setActiveTab, onCancel, onRetry, onDelete, backToList }: { task: Task; headingRef: { current: HTMLHeadingElement | null }; events: TaskEvent[]; document?: Json; fileId?: string; plans: Json[]; tables: Json[]; representations: Json; artifacts: Artifact[]; activeTab: string; setActiveTab: (tab: never) => void; onCancel: () => void; onRetry: () => void; onDelete: () => void; backToList: () => void }) {
   const [timelineExpanded, setTimelineExpanded] = useState(false)
+  const artifactCount = task.result?.result_ref?.artifact_count ?? artifacts.length
   const tabs = [
     ['overview', '概览'],
     ...(representations.plain_text ? [['text', '正文']] : []),
@@ -290,8 +297,8 @@ export function TaskView({ task, headingRef, events, document, fileId, plans, ta
     ...(representations.markdown ? [['markdown', 'Markdown']] : []),
     ...(hasOcrOverlay(document, artifacts) ? [['ocr', 'OCR 校对']] : []),
     ...(representations.html ? [['html', 'HTML 预览']] : []),
-    ...(document ? [['json', '结构化 JSON']] : []),
-    ...(artifacts.length ? [['artifacts', `产物 ${artifacts.length}`]] : []),
+    ...(document || task.result?.result_ref ? [['json', '结构化 JSON']] : []),
+    ...(artifactCount ? [['artifacts', `产物 ${artifactCount}`]] : []),
     ['details', '执行详情'],
   ] as [string, string][]
   const duration = taskDuration(task)
@@ -299,11 +306,12 @@ export function TaskView({ task, headingRef, events, document, fileId, plans, ta
   const onTabKey = (event: KeyboardEvent<HTMLElement>) => { const keys = ['ArrowLeft','ArrowRight','Home','End']; if (!keys.includes(event.key)) return; event.preventDefault(); const current = tabs.findIndex(([key]) => key === activeTab); const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; setActiveTab(tabs[next][0] as never); (event.currentTarget.querySelectorAll('button')[next] as HTMLButtonElement)?.focus() }
   const selectTab = (key: string) => { setActiveTab(key as never); const url = new URL(window.location.href); if (key === 'overview') url.searchParams.delete('tab'); else url.searchParams.set('tab', key); window.history.replaceState({}, '', url) }
   const visibleEvents = terminal.has(task.status) && !timelineExpanded && events.length > 3 ? events.slice(-3).reverse() : events
-  const primaryAction = artifacts.length ? { label: `查看产物 ${artifacts.length}`, action: () => setActiveTab('artifacts' as never) } : task.status === 'partial' ? { label: '查看可用结果', action: () => setActiveTab('overview' as never) } : terminal.has(task.status) ? { label: '重试任务', action: onRetry } : null
+  const primaryAction = artifactCount ? { label: `查看产物 ${artifactCount}`, action: () => setActiveTab('artifacts' as never) } : task.status === 'partial' ? { label: '查看可用结果', action: () => setActiveTab('overview' as never) } : terminal.has(task.status) ? { label: '重试任务', action: onRetry } : null
   return <><span className="sr-only" role="status" aria-live="polite">任务状态：{statusLabels[task.status]}</span><div className="task-detail-toolbar"><button className="back-to-list" type="button" onClick={backToList}>← 返回任务列表</button><div className="task-actions">{primaryAction && <button className="task-primary-action" type="button" onClick={primaryAction.action}>{primaryAction.label}</button>}{!terminal.has(task.status) && <button type="button" onClick={onCancel}>取消任务</button>}{terminal.has(task.status) && <button type="button" onClick={onRetry}>重试</button>}{terminal.has(task.status) && <button type="button" onClick={onDelete}>删除</button>}</div></div><div className="task-heading"><div><p className="eyebrow">任务 {task.task_id}</p><h2 ref={headingRef} tabIndex={-1}>{statusLabels[task.status]}</h2><p className="task-file-name">{taskFilename(task)}</p><p className="task-subline">{task.data_id ? `业务标识：${task.data_id} · ` : `创建于 ${formatDate(task.created_at)} · `}<strong>{durationLabel} {duration}</strong></p></div></div>
    <span className="sr-only" role="status" aria-live="polite">{events.length ? `最新事件：${events.at(-1)?.message || events.at(-1)?.type}` : ''}</span><section className="timeline-wrap"><div className="timeline-heading"><div><strong>执行过程</strong><span>{events.length ? `${events.length} 个事件` : '正在读取事件'}</span></div>{terminal.has(task.status) && events.length > 3 && <button type="button" onClick={() => setTimelineExpanded((expanded) => !expanded)}>{timelineExpanded ? '收起事件' : `展开全部 ${events.length} 个事件`}</button>}</div><div className="timeline" tabIndex={0} role="region" aria-label="任务执行时间线">{visibleEvents.length ? visibleEvents.map((event, index) => <Timeline key={event.sequence} label={`${formatDate(event.at)} · ${event.message || event.type}`} state={index === visibleEvents.length - 1 && !terminal.has(task.status) ? 'current' : 'done'} />) : <Timeline label="正在读取任务时间线" state="current" />}</div></section>
   {plans.length > 0 && <div className="plan-card"><p className="card-label">自动计划 · RULE-BASED</p>{plans.map((step, index) => <div className="plan-step" key={String(step.step_id)}><b>{index + 1}</b><div><strong>{String(step.skill_name)}</strong><p>{String(step.reason)}</p></div><span className={`badge ${String(step.status)}`}>{stepLabel(String(step.status))}</span></div>)}</div>}
   {(['failed','partial','cancelled','interrupted'] as TaskStatus[]).includes(task.status) && <div className="failure" role="status"><strong>{task.status === 'failed' ? '任务未完成' : task.status === 'partial' ? '任务部分完成' : task.status === 'cancelled' ? '任务已取消' : '任务被服务重启中断'}</strong><p>{String(task.error?.message || (task.result?.error as Json | undefined)?.message || (task.status === 'partial' ? '部分内容可用，请查看 warning 和产物。' : '可以重试任务或查看执行详情。'))}</p></div>}
+  <ResultAccess task={task} document={document} />
   <nav className="tabs" role="tablist" aria-label="解析结果视图" onKeyDown={onTabKey}>{tabs.map(([key, label]) => <button key={key} id={`tab-${key}`} role="tab" tabIndex={activeTab === key ? 0 : -1} aria-selected={activeTab === key} aria-controls="result-panel" className={activeTab === key ? 'active' : ''} onClick={() => selectTab(key)}>{label}</button>)}</nav>
   <div id="result-panel" role="tabpanel" tabIndex={0} aria-labelledby={`tab-${activeTab}`}><ResultTab tab={activeTab} task={task} document={document} fileId={fileId} tables={tables} representations={representations} artifacts={artifacts} onShowArtifacts={() => selectTab('artifacts')} /></div>
   </>
@@ -326,12 +334,36 @@ function ArtifactItem({ artifact, taskId, index }: { artifact: Artifact; taskId:
  const image = artifact.content_type?.startsWith('image/')
  return <div className={`artifact ${image ? 'image-artifact' : ''}`}>{image ? <img src={downloadUrl} loading="lazy" alt={`${filename} 预览`} /> : <span aria-hidden="true">⌁</span>}<div><strong>{filename}</strong><small>{artifact.kind === 'export' ? '结果导出' : artifact.kind || '文件产物'}{artifact.size_bytes ? ` · ${fileSize(artifact.size_bytes)}` : ''}</small></div><a href={downloadUrl} download={filename}>下载</a></div>
 }
+export function ArtifactDirectory({ taskId, initial, total, directoryUrl }: { taskId: string; initial: Artifact[]; total?: number; directoryUrl?: string }) {
+  const [items, setItems] = useState(initial)
+  const [nextOffset, setNextOffset] = useState<number | null>(directoryUrl && total !== undefined && total > initial.length ? initial.length : null)
+  const [requestOffset, setRequestOffset] = useState<number | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    if (requestOffset === null || !directoryUrl) return
+    const controller = new AbortController()
+    setLoading(true); setError('')
+    const separator = directoryUrl.includes('?') ? '&' : '?'
+    api<{ artifacts: Artifact[]; next_offset: number | null }>(`${directoryUrl}${separator}offset=${requestOffset}&limit=100`, { signal: controller.signal })
+      .then((page) => {
+        if (controller.signal.aborted) return
+        setItems((current) => { const ids = new Set(current.map((item) => item.artifact_id)); return [...current, ...page.artifacts.filter((item) => { if (ids.has(item.artifact_id)) return false; ids.add(item.artifact_id); return true })] })
+        setNextOffset(page.next_offset !== null && page.next_offset > requestOffset ? page.next_offset : null)
+      })
+      .catch((reason) => { if (!controller.signal.aborted) setError(errorMessage(reason)) })
+      .finally(() => { if (!controller.signal.aborted) { setLoading(false); setRequestOffset(null) } })
+    return () => controller.abort()
+  }, [directoryUrl, requestOffset])
+  return <section className="artifact-directory" aria-label="产物目录"><div className="artifacts">{items.length ? items.map((artifact, index) => <ArtifactItem key={artifact.artifact_id} artifact={artifact} taskId={taskId} index={index} />) : nextOffset === null ? <NoContent text="当前结果没有可下载的 artifact。" /> : null}</div>{directoryUrl && total !== undefined && <p className="artifact-directory-status" aria-live="polite">已显示 {new Intl.NumberFormat('zh-CN').format(items.length)} / {new Intl.NumberFormat('zh-CN').format(total)} 个产物{loading ? '，正在加载…' : ''}</p>}{error && <p role="alert">产物读取失败：{error}</p>}{nextOffset !== null && <button className="result-unit-toggle" type="button" disabled={loading} onClick={() => { setLoading(true); setRequestOffset(nextOffset) }}>{loading ? '正在加载产物…' : error ? '重试加载产物' : '加载更多产物'}</button>}</section>
+}
+
 function JsonView({ text, label }: { text: string; label: string }) { const [query, setQuery] = useState(''); const shown = query ? text.split('\n').filter((line) => line.toLowerCase().includes(query.toLowerCase())).join('\n') || '没有匹配内容' : text; return <div className="json-view"><div className="result-actions"><label>{label}搜索<input value={query} onChange={(event) => setQuery(event.target.value)} /></label><CopyButton text={text} /></div><details open><summary>{label}</summary><pre className="json">{shown}</pre></details></div> }
 function ResultTab({ tab, task, document, fileId: _fileId, tables, representations, artifacts, onShowArtifacts }: { tab: string; task: Task; document?: Json; fileId?: string; tables: Json[]; representations: Json; artifacts: Artifact[]; onShowArtifacts: () => void }) {
   const workbook = (document?.metadata as Json | undefined)?.excel_storage as Json | undefined
-  const hasStoredWorkbook = workbook?.filename === 'workbook.sqlite' || tables.some((table) => table.data_ref === 'workbook.sqlite')
+  const hasStoredWorkbook = ['workbook.sqlite', 'workbook/manifest.json'].includes(String(workbook?.filename)) || tables.some(storedSpreadsheet)
   const previewTruncated = hasStoredWorkbook && tables.some((table) => table.preview_truncated === true)
-  const previewHint = previewTruncated && <p className="spreadsheet-preview-note" role="note">这里只显示工作簿预览。{artifacts.length ? <button type="button" onClick={onShowArtifacts}>在产物中下载完整工作表</button> : '完整数据请下载工作表文件。'}</p>
+  const previewHint = !task.result?.result_ref && !(document?.metadata as Json | undefined)?.result_storage && previewTruncated && <p className="spreadsheet-preview-note" role="note">这里只显示工作簿预览。{artifacts.length ? <button type="button" onClick={onShowArtifacts}>在产物中下载完整工作表</button> : '完整数据请下载工作表文件。'}</p>
  const plainText = String(representations.plain_text || '当前结果没有可用的纯文本表示。')
  const markdown = tab === 'markdown' ? String(representations.markdown || '当前结果没有可用的 Markdown 表示。') : ''
  const details = tab === 'details' ? JSON.stringify({ plan: task.plan, error: task.error, warnings: task.warnings, result: task.result }, null, 2) : ''
@@ -341,10 +373,52 @@ function ResultTab({ tab, task, document, fileId: _fileId, tables, representatio
  if (tab === 'markdown') return <>{previewHint}<CopyButton text={markdown} /><pre className="text-preview markdown">{markdown}</pre></>
  if (tab === 'ocr') return <OcrProofing document={document} taskId={task.task_id} artifacts={artifacts} />
  if (tab === 'html') return representations.html ? <iframe className="html-preview" title="HTML 内容预览" sandbox="" srcDoc={String(representations.html)} /> : <NoContent text="当前结果没有可用的 HTML 表示。" />
- if (tab === 'tables') return <div className="tables">{tables.length ? tables.some((table) => table.data_ref === 'workbook.sqlite') ? <><SpreadsheetTables key={task.task_id} taskId={task.task_id} tables={tables.filter((table) => table.data_ref === 'workbook.sqlite')} artifacts={artifacts} onShowArtifacts={onShowArtifacts} />{tables.filter((table) => table.data_ref !== 'workbook.sqlite').map((table, index) => <Table key={index} table={table} />)}</> : tables.map((table, index) => <Table key={index} table={table} />) : <NoContent text="当前结果没有可预览的表格。" />}</div>
- if (tab === 'artifacts') return <div className="artifacts">{artifacts.length ? artifacts.map((artifact, i) => <ArtifactItem artifact={artifact} taskId={task.task_id} index={i} key={artifact.artifact_id} />) : <NoContent text="当前结果没有可下载的 artifact。" />}</div>
+ if (tab === 'tables') return <div className="tables">{tables.length ? tables.some(storedSpreadsheet) ? <><SpreadsheetTables key={task.task_id} taskId={task.task_id} tables={tables.filter(storedSpreadsheet)} artifacts={artifacts} onShowArtifacts={onShowArtifacts} />{tables.filter((table) => !storedSpreadsheet(table)).map((table, index) => <Table key={index} table={table} />)}</> : tables.map((table, index) => <Table key={index} table={table} />) : <NoContent text="当前结果没有可预览的表格。" />}</div>
+ if (tab === 'artifacts') return <ArtifactDirectory key={task.task_id} taskId={task.task_id} initial={artifacts} total={task.result?.result_ref?.artifact_count} directoryUrl={task.result?.result_ref?.artifacts_url} />
  if (tab === 'details') return <JsonView text={details} label="执行详情" />
- return <JsonView text={structured} label="结构化 JSON" />
+ return <>{task.result?.result_ref && <ResultUnits key={task.task_id} manifestUrl={task.result.result_ref.manifest_url} taskId={task.task_id} />}<JsonView text={structured} label={task.result?.result_ref ? '结构化 JSON 预览' : '结构化 JSON'} /></>
+}
+function ResultAccess({ task, document }: { task: Task; document?: Json }) {
+  const reference = task.result?.result_ref
+  const storage = (document?.metadata as Json | undefined)?.result_storage as Json | undefined
+  if (!reference && !storage) return null
+  const truncated = reference?.preview_truncated || storage?.preview_truncated === true
+  return <aside className="result-storage-note" aria-label="完整解析结果"><p>{truncated ? '当前页面仅显示部分预览，完整解析内容已保存。' : '解析结果已保存，可下载完整内容。'}</p>{reference?.document_url && <a href={reference.document_url} download="document.json">下载完整解析结果</a>}</aside>
+}
+export function ResultUnits({ manifestUrl, taskId }: { manifestUrl: string; taskId: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const [manifest, setManifest] = useState<ResultManifest | null>(null)
+  const [error, setError] = useState('')
+  const [retry, setRetry] = useState(0)
+  const [selected, setSelected] = useState('')
+  useEffect(() => {
+    if (!expanded) return
+    const controller = new AbortController()
+    setError(''); setManifest(null); setSelected('')
+    api<ResultManifest>(manifestUrl, { signal: controller.signal })
+      .then((result) => { if (!controller.signal.aborted) { setManifest(result); setSelected(result.units[0]?.unit_id || '') } })
+      .catch((reason) => { if (!controller.signal.aborted) setError(errorMessage(reason)) })
+    return () => controller.abort()
+  }, [expanded, manifestUrl, retry])
+  return <section className="result-units"><button type="button" className="result-unit-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? '收起内容单元' : '按内容单元查看'}</button>{expanded && <div className="result-unit-body"><div aria-live="polite">{error ? <><span role="alert">目录读取失败：{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>重试目录</button></> : !manifest ? '正在读取内容目录…' : !manifest.units.length ? '当前结果没有可分页的内容单元，可下载完整结果。' : null}</div>{manifest && manifest.units.length > 0 && <><label>内容单元<select value={selected} onChange={(event) => setSelected(event.target.value)}>{manifest.units.map((unit) => <option key={unit.unit_id} value={unit.unit_id}>{unit.label || unit.kind}（{new Intl.NumberFormat('zh-CN').format(unit.record_count)} 条）</option>)}</select></label>{selected && <ResultUnitRecords key={selected} taskId={taskId} unitId={selected} />}</>}</div>}</section>
+}
+function ResultUnitRecords({ taskId, unitId }: { taskId: string; unitId: string }) {
+  const [offsets, setOffsets] = useState([0])
+  const [index, setIndex] = useState(0)
+  const [page, setPage] = useState<ResultRecords | null>(null)
+  const [error, setError] = useState('')
+  const [retry, setRetry] = useState(0)
+  const offset = offsets[index]
+  useEffect(() => {
+    const controller = new AbortController()
+    setPage(null); setError('')
+    api<ResultRecords>(`/api/v1/tasks/${encodeURIComponent(taskId)}/result/units/${encodeURIComponent(unitId)}/records?offset=${offset}&limit=100`, { signal: controller.signal })
+      .then((result) => { if (!controller.signal.aborted) setPage(result) })
+      .catch((reason) => { if (!controller.signal.aborted) setError(errorMessage(reason)) })
+    return () => controller.abort()
+  }, [taskId, unitId, offset, retry])
+  const next = page?.next_offset
+  return <div className="result-unit-records"><div aria-live="polite">{error ? <><span role="alert">内容读取失败：{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>重试内容</button></> : !page ? '正在读取内容…' : !page.records.length ? '此单元没有可显示的记录。' : `第 ${index + 1} 页，共显示 ${page.records.length} 条记录`}</div>{page && page.records.length > 0 && <JsonView text={JSON.stringify(page.records, null, 2)} label="当前单元记录" />}<nav className="table-pagination" aria-label="内容单元分页"><button type="button" disabled={index === 0 || (!page && !error)} onClick={() => setIndex((value) => value - 1)}>上一页</button><span>第 {index + 1} 页</span><button type="button" disabled={next == null || next <= offset || Boolean(error)} onClick={() => { if (next == null || next <= offset) return; setOffsets((values) => [...values.slice(0, index + 1), next]); setIndex((value) => value + 1) }}>下一页</button></nav></div>
 }
 export type OcrPage = { pageNumber: number; blocks: Json[]; width: number; height: number; imageUrl: string }
 export function ocrBlocks(value: unknown): Json[] { return Array.isArray(value) ? value.filter((block): block is Json => Boolean(block) && typeof block === 'object' && Array.isArray((block as Json).bbox) && ((block as Json).bbox as unknown[]).length >= 4) : [] }

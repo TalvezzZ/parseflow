@@ -423,11 +423,17 @@ class PersistentTaskManager:
             await self._fail(record.task_id, "task_execution_failed", str(exc))
 
     def _discard_excel_outputs(self, record: TaskRecord) -> None:
+        """Legacy name retained; cleanup now covers every file-backed result."""
         task_root = self.repository.root.parent / "artifacts" / record.task_id
-        if Path(record.filename or "").suffix.lower() not in {".xls", ".xlsx", ".xlsm"} and not (task_root / "files" / "workbook.sqlite").is_file():
-            return
         from app.skills.excel.process import remove_excel_outputs
+        from app.tasks.result_store import remove_file_result
         remove_excel_outputs(task_root / "files")
+        remove_file_result(task_root / "files")
+        workspace = task_root / "files"
+        if workspace.resolve().parent == task_root.resolve() and workspace.is_dir() and not workspace.is_symlink():
+            # Every file in this directory is task-owned; uploads live in a separate root.
+            import shutil
+            shutil.rmtree(workspace)
         manifest = task_root / "manifest.json"
         if manifest.resolve().parent == task_root.resolve():
             manifest.unlink(missing_ok=True)
@@ -436,8 +442,7 @@ class PersistentTaskManager:
         current = await self.get(task_id)
         if current is None or current.status in TERMINAL_STATUSES:
             return
-        if code == "task_timeout":
-            self._discard_excel_outputs(current)
+        self._discard_excel_outputs(current)
         def fail(record: TaskRecord) -> None:
             record.status = "failed"
             record.error = ProviderError(code=code, message=message, retryable=False).model_dump()

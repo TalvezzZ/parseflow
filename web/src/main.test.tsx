@@ -1,7 +1,7 @@
 import { createRef, useState } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { OcrProofing, ParseModeSelector, SpreadsheetTables, Table, TaskCenter, TaskView, ocrPages } from './main'
+import { OcrProofing, ParseModeSelector, SpreadsheetTables, ResultUnits, ArtifactDirectory, Table, TaskCenter, TaskView, ocrPages } from './main'
 import type { ParseMode } from './main'
 
 const task = { task_id: `task_${'1'.repeat(32)}`, file_id: `file_${'2'.repeat(32)}`, status: 'interrupted', created_at: new Date().toISOString(), result: { status: 'failed', artifacts: [], steps: [], warnings: [], metrics: {} } }
@@ -259,5 +259,145 @@ describe('Table', () => {
     expect(screen.getByRole('table', { name: /第 1 页，共 3 页/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '下一页' }))
     expect(screen.getByText('row-51')).toBeInTheDocument()
+  })
+})
+
+
+describe('Uniform file-backed results', () => {
+  const reference = { schema_version: 1, storage_key: 'result/manifest.json', manifest_url: '/api/v1/tasks/test/result', document_url: '/api/v1/tasks/test/result/document', preview_truncated: true }
+  const response = (body: unknown) => ({ ok: true, json: async () => body }) as Response
+  const props = (document: any, result_ref: any = reference) => ({ task: { ...task, status: 'succeeded', result: { ...task.result, status: 'succeeded', document, result_ref } } as any, headingRef: createRef<HTMLHeadingElement>(), events: [], document, plans: [], tables: document.tables || [], representations: { plain_text: '预览内容' }, artifacts: [], setActiveTab: vi.fn(), onCancel: vi.fn(), onRetry: vi.fn(), onDelete: vi.fn(), backToList: vi.fn() })
+
+  it.each(['pdf', 'docx', 'pptx', 'image', 'txt', 'audio'])('labels %s preview and exposes direct download without fetching full results', (document_type) => {
+    const fetcher = vi.fn()
+    vi.stubGlobal('fetch', fetcher)
+    render(<TaskView {...props({ document_type, metadata: { result_storage: { schema_version: 1, filename: 'result/manifest.json', preview_truncated: true } } })} activeTab="overview" />)
+    expect(screen.getByText('当前页面仅显示部分预览，完整解析内容已保存。')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '下载完整解析结果' })).toHaveAttribute('href', reference.document_url)
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('keeps legacy embedded documents free of new requests and hints', () => {
+    const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher)
+    render(<TaskView {...props({ document_type: 'pdf' }, null)} activeTab="overview" />)
+    expect(screen.queryByRole('link', { name: '下载完整解析结果' })).not.toBeInTheDocument()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('shows metadata-only preview hint without exposing storage paths', () => {
+    render(<TaskView {...props({ document_type: 'pdf', metadata: { result_storage: { preview_truncated: true } } }, null)} activeTab="text" />)
+    expect(screen.getByText('当前页面仅显示部分预览，完整解析内容已保存。')).toBeInTheDocument()
+    expect(screen.queryByText('result/manifest.json')).not.toBeInTheDocument()
+  })
+
+  it('mounts optional units from the task JSON tab without eager requests', () => {
+    const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher)
+    render(<TaskView {...props({ document_type: 'pdf' })} activeTab="json" />)
+    expect(screen.getByRole('button', { name: '按内容单元查看' })).toBeInTheDocument()
+    expect(screen.getByText('结构化 JSON 预览', { selector: 'summary' })).toBeInTheDocument()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('opens units only on demand and follows returned record offsets', async () => {
+    const fetcher = vi.fn(async (url: string) => response(url === reference.manifest_url
+      ? { schema_version: 1, document_type: 'pdf', units: [{ unit_id: 'page-1', kind: 'page', label: '第 1 页', record_count: 200 }, { unit_id: 'page-2', kind: 'page', label: '第 2 页', record_count: 1 }] }
+      : url.includes('offset=7') ? { unit_id: 'page-1', records: [{ text: 'second-page' }], next_offset: null }
+      : { unit_id: 'page-1', records: [{ text: 'first-page' }], next_offset: 7 }))
+    vi.stubGlobal('fetch', fetcher)
+    render(<ResultUnits manifestUrl={reference.manifest_url} taskId={task.task_id} />)
+    expect(fetcher).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '按内容单元查看' }))
+    await screen.findByText(/first-page/)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(fetcher.mock.calls[1][0]).toContain('/page-1/records?offset=0&limit=100')
+    fireEvent.click(screen.getByRole('button', { name: '下一页' }))
+    await screen.findByText(/second-page/)
+    expect(fetcher.mock.calls[2][0]).toContain('offset=7')
+    fireEvent.click(screen.getByRole('button', { name: '上一页' }))
+    await screen.findByText(/first-page/)
+    fireEvent.change(screen.getByLabelText('内容单元'), { target: { value: 'page-2' } })
+    await waitFor(() => expect(fetcher.mock.calls[4][0]).toContain('/page-2/records?offset=0'))
+  })
+
+  it('retries manifest errors and reports empty units', async () => {
+    const fetcher = vi.fn().mockRejectedValueOnce(new Error('断开连接')).mockResolvedValueOnce(response({ schema_version: 1, units: [] }))
+    vi.stubGlobal('fetch', fetcher)
+    render(<ResultUnits manifestUrl={reference.manifest_url} taskId={task.task_id} />)
+    fireEvent.click(screen.getByRole('button', { name: '按内容单元查看' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('断开连接')
+    fireEvent.click(screen.getByRole('button', { name: '重试目录' }))
+    await screen.findByText('当前结果没有可分页的内容单元，可下载完整结果。')
+  })
+
+  it('aborts record reads when changing units', async () => {
+    let resolveFirst!: (response: Response) => void
+    const pending = new Promise<Response>((resolve) => { resolveFirst = resolve })
+    const fetcher = vi.fn((url: string) => url === reference.manifest_url ? Promise.resolve(response({ units: [{ unit_id: 'one', label: '单元一', record_count: 1 }, { unit_id: 'two', label: '单元二', record_count: 1 }] })) : url.includes('/one/') ? pending : Promise.resolve(response({ records: [{ text: 'current' }], next_offset: null })))
+    vi.stubGlobal('fetch', fetcher)
+    render(<ResultUnits manifestUrl={reference.manifest_url} taskId={task.task_id} />)
+    fireEvent.click(screen.getByRole('button', { name: '按内容单元查看' }))
+    await screen.findByLabelText('内容单元')
+    const signal = (fetcher.mock.calls[1] as unknown as [string, RequestInit])[1].signal
+    fireEvent.change(screen.getByLabelText('内容单元'), { target: { value: 'two' } })
+    expect(signal?.aborted).toBe(true)
+    resolveFirst(response({ records: [{ text: 'stale' }], next_offset: null }))
+    await screen.findByText(/current/)
+    expect(screen.queryByText(/stale/)).not.toBeInTheDocument()
+  })
+
+  it('routes file-backed Excel through existing sheet pagination', async () => {
+    const fetcher = vi.fn(async (_url: string) => response({ rows: [{ row: 1048576, cells: [{ coordinate: 'XFD1048576', row: 1048576, column: 16384, value: 'new-workbook' }] }], next_after_row: null }))
+    vi.stubGlobal('fetch', fetcher)
+    const document = { document_type: 'xlsx', metadata: { excel_storage: { filename: 'workbook/manifest.json' } }, tables: [{ sheet_id: 0, sheet_name: '明细', data_ref: 'workbook/manifest.json' }] }
+    render(<TaskView {...props(document)} activeTab="tables" />)
+    await screen.findByText('new-workbook')
+    expect(fetcher.mock.calls[0][0]).toContain('/sheets/0/rows')
+  })
+})
+
+
+describe('Complete artifact directory', () => {
+  const initial = [{ artifact_id: 'first', filename: 'first.txt' }]
+  const response = (body: unknown) => ({ ok: true, json: async () => body }) as Response
+  it('continues from the preview without fetching it again and honors server offsets', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(response({ artifacts: [{ artifact_id: 'second', filename: 'second.txt' }], next_offset: 7 })).mockResolvedValueOnce(response({ artifacts: [{ artifact_id: 'third', filename: 'third.txt' }], next_offset: null }))
+    vi.stubGlobal('fetch', fetcher)
+    render(<ArtifactDirectory taskId={task.task_id} initial={initial} total={3} directoryUrl="/directory" />)
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('link', { name: '下载' })).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: '加载更多产物' }))
+    await screen.findByText('second.txt')
+    expect(fetcher.mock.calls[0][0]).toBe('/directory?offset=1&limit=100')
+    fireEvent.click(screen.getByRole('button', { name: '加载更多产物' }))
+    await screen.findByText('third.txt')
+    expect(fetcher.mock.calls[1][0]).toBe('/directory?offset=7&limit=100')
+    expect(screen.queryByRole('button', { name: '加载更多产物' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('link', { name: '下载' })).toHaveLength(3)
+  })
+  it('retries failed reads and aborts requests when unmounted', async () => {
+    let complete!: (response: Response) => void
+    const pending = new Promise<Response>((resolve) => { complete = resolve })
+    const fetcher = vi.fn().mockRejectedValueOnce(new Error('连接中断')).mockReturnValueOnce(pending)
+    vi.stubGlobal('fetch', fetcher)
+    const view = render(<ArtifactDirectory taskId={task.task_id} initial={initial} total={101} directoryUrl="/directory" />)
+    fireEvent.click(screen.getByRole('button', { name: '加载更多产物' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('连接中断')
+    fireEvent.click(screen.getByRole('button', { name: '重试加载产物' }))
+    const signal = fetcher.mock.calls[1][1].signal
+    view.unmount()
+    expect(signal.aborted).toBe(true)
+    complete(response({ artifacts: [], next_offset: null }))
+  })
+  it('keeps old artifacts static and can start from an empty bounded preview', async () => {
+    const fetcher = vi.fn(async () => response({ artifacts: initial, next_offset: null }))
+    vi.stubGlobal('fetch', fetcher)
+    const view = render(<ArtifactDirectory taskId={task.task_id} initial={initial} />)
+    expect(screen.queryByRole('button', { name: '加载更多产物' })).not.toBeInTheDocument()
+    expect(fetcher).not.toHaveBeenCalled()
+    view.unmount()
+    render(<ArtifactDirectory taskId={task.task_id} initial={[]} total={1} directoryUrl="/directory" />)
+    fireEvent.click(screen.getByRole('button', { name: '加载更多产物' }))
+    await screen.findByText('first.txt')
+    expect((fetcher.mock.calls[0] as unknown as [string])[0]).toBe('/directory?offset=0&limit=100')
   })
 })

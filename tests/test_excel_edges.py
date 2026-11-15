@@ -18,7 +18,7 @@ def context(source: Path, output: Path) -> ParseContext:
 
 
 def full_cells(output: Path) -> list[dict]:
-    return [cell for row in read_sheet_page(output / "workbook.sqlite", 0)["rows"] for cell in row["cells"]]
+    return [cell for row in read_sheet_page(output / "workbook/manifest.json", 0)["rows"] for cell in row["cells"]]
 
 
 def test_auxiliary_shared_strings_are_erased_before_download(tmp_path: Path) -> None:
@@ -34,7 +34,8 @@ def test_auxiliary_shared_strings_are_erased_before_download(tmp_path: Path) -> 
     output = tmp_path / "out"
     result = OpenpyxlProvider()._parse_sync(context(source, output))
     assert result.status == "success", result.error
-    assert sentinel.encode() not in (output / "workbook.sqlite").read_bytes()
+    assert not list((output / "workbook").rglob("*.sqlite"))
+    assert sentinel not in str(full_cells(output))
     assert [item["value"] for item in full_cells(output)] == ["public"]
 
 

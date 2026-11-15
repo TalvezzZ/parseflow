@@ -57,7 +57,7 @@ async def run(counts: list[int]) -> None:
             report = {"requested_cells": count, "actual_cells": actual, "status": result.status,
                       "error": result.error.model_dump() if result.error else None,
                       "source_bytes": source.stat().st_size, "generation_seconds": generation_seconds,
-                      "sqlite_bytes": (output / "workbook.sqlite").stat().st_size if (output / "workbook.sqlite").exists() else 0,
+                      "file_storage_bytes": sum(item.stat().st_size for item in (output / "workbook").rglob("*") if item.is_file()),
                       "preview_json_bytes": len(result.model_dump_json().encode()), **result.metrics}
             results.append(report)
             print(json.dumps(report, ensure_ascii=False), flush=True)

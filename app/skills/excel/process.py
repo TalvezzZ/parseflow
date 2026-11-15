@@ -22,7 +22,7 @@ def _failure(code: str, message: str) -> ProviderResult:
 def remove_excel_outputs(workspace: Path) -> None:
     """Only remove known generated outputs under this task's exact workspace."""
     root = workspace.resolve()
-    for name in ("workbook.sqlite", "images", "exports", ".exports.tmp"):
+    for name in ("workbook.sqlite", "workbook", "images", "exports", ".exports.tmp"):
         target = root / name
         if target.is_symlink():
             target.unlink()

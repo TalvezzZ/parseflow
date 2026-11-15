@@ -1,4 +1,23 @@
 
+/* File-backed results retain the workbench's existing palette and spacing. */
+.result-storage-note { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 12px 14px; margin: 14px 0; border: 1px solid #dce7ed; border-radius: 9px; background: #f8fbfc; color: #415e6b; font-size: 13px; }
+.result-storage-note p { flex: 1 1 220px; margin: 0; }
+.result-storage-note a { color: #0d718e; font-weight: 600; text-underline-offset: 3px; }
+.result-units { margin: 12px 0 18px; min-width: 0; }
+.result-units button { cursor: pointer; }
+.result-unit-toggle, .result-unit-body button { padding: 7px 11px; border: 1px solid #cfe2e9; border-radius: 7px; background: #f4fafc; color: #21647d; }
+.result-unit-toggle:hover, .result-unit-body button:hover:not(:disabled) { background: #e8f6fa; border-color: #94cbdc; }
+.result-unit-body { padding: 12px 0; min-width: 0; }
+.result-unit-body label { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 13px; }
+.result-unit-body select { min-width: 0; max-width: 100%; flex: 1 1 180px; padding: 8px; color: #172b3a; background: #fff; border: 1px solid #cfe2e9; border-radius: 7px; }
+.result-unit-body [role="alert"] { color: #a23931; overflow-wrap: anywhere; }
+.result-unit-body button:disabled { opacity: .5; cursor: not-allowed; }
+.result-storage-note a:focus-visible, .result-units button:focus-visible, .result-units select:focus-visible { outline: 3px solid #70c9e2; outline-offset: 2px; }
+
+.artifact-directory-status { color: #415e6b; font-size: 13px; margin: 12px 0; }
+.artifact-directory [role="alert"] { color: #a23931; overflow-wrap: anywhere; }
+.artifact-directory > button:focus-visible { outline: 3px solid #70c9e2; outline-offset: 2px; }
+.artifact-directory > button:disabled { opacity: .5; cursor: not-allowed; }
 /* Stored workbook rows share the existing table palette and controls. */
 .spreadsheet-results { min-width: 0; }
 .spreadsheet-sheets { display: flex; gap: 7px; max-height: 130px; padding: 4px 2px 11px; overflow: auto; flex-wrap: wrap; }
