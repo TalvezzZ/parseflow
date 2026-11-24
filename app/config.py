@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # 渲染层：移除 CJK 字间生成空格。默认关闭以保持既有输出字节等价，
     # 开启前需在真实中文语料上验证（见 docs/plan-1.6.1.md 阶段 1C）。
     render_cjk_space_removal: bool = False
+    # 资产投递：结果里是否给出图片签名地址；none 时只给 asset_id，不签发 URL。
+    asset_delivery: Literal["url", "none"] = "url"
+    asset_signing_secret: str | None = None
+    asset_url_ttl_seconds: int = 900
+    asset_list_max: int = 100
+    asset_inline_max_bytes: int = 524288
+    asset_inline_max_count: int = 10
     ocr_layout_model_name: str = "PP-DocLayout-M"
     ocr_layout_threshold: float = Field(default=0.5, ge=0, le=1)
     ocr_layout_max_total_size_mb: int = Field(default=50, ge=1, le=1024)

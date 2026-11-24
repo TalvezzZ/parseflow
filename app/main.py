@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 from shutil import disk_usage, which
@@ -19,6 +21,8 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from app.agent.executor import SkillExecutor
 from app.agent.pipeline import OfficeParsePipeline
+from app.assets import (AssetError, AssetSigner, SignedLocalProvider, asset_id_from_sha256,
+                        encode_data_uri, sha256_from_asset_id)
 from app.config import get_settings
 from app.documents.models import FileInput, ParseContext, ParseOptions
 from app.files import LocalFileStore, StoredFilePublic
@@ -56,6 +60,9 @@ file_store = LocalFileStore(str(data_root / "files"), settings.file_max_size_mb,
                             min_free_mb=settings.storage_min_free_mb)
 task_repository = FileTaskRepository(data_root / "tasks")
 artifact_repository = ArtifactRepository(data_root / "artifacts")
+asset_signer = AssetSigner(settings.asset_signing_secret or settings.api_key, settings.asset_url_ttl_seconds)
+asset_url_provider = SignedLocalProvider(asset_signer)
+_asset_index_cache: dict[str, tuple[int, dict[str, dict[str, str]]]] = {}
 http_metrics = HttpMetrics()
 task_execution_metrics = TaskExecutionMetrics()
 registry = create_default_registry()
@@ -143,6 +150,99 @@ def _public_document(value: object) -> dict | None:
         return item
 
     return sanitize(value) if isinstance(value, dict) else None
+
+
+def _asset_index(workspace: Path) -> dict[str, dict[str, str]]:
+    """sha256 -> {relative_path, mime_type}；按文件 mtime 缓存，避免每次请求重读大文档。"""
+    path = safe_result_path(workspace, "result/document.json")
+    if not path.is_file():
+        return {}
+    key = str(workspace)
+    mtime = path.stat().st_mtime_ns
+    cached = _asset_index_cache.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    index: dict[str, dict[str, str]] = {}
+    for image in payload.get("images") or []:
+        if not isinstance(image, dict):
+            continue
+        digest = image.get("sha256")
+        relative = image.get("relative_path")
+        if isinstance(digest, str) and len(digest) == 64 and isinstance(relative, str) and relative:
+            index[digest.lower()] = {
+                "relative_path": relative,
+                "mime_type": str(image.get("mime_type") or "application/octet-stream"),
+            }
+    _asset_index_cache[key] = (mtime, index)
+    return index
+
+
+_asset_digest_cache: dict[tuple[str, int, int], str] = {}
+
+
+def _resolve_asset_path(workspace: Path, relative_path: str, digest: str) -> Path:
+    """解析图片路径：限定 images/ 前缀、禁止越界，并校验文件内容与声明摘要一致。
+
+    图片不在 result/manifest.json 的资源清单内，因此不能用 resolve_result_resource；
+    这里用"路径白名单 + 内容摘要校验"完成授权，等价于只能取到被声明的那张图。
+    """
+    if not relative_path.startswith("images/"):
+        raise AssetError("asset_not_found", "未找到资产", status_code=404)
+    try:
+        path = safe_result_path(workspace, relative_path)
+    except ResultStorageError as exc:
+        raise AssetError("asset_not_found", "未找到资产", status_code=404) from exc
+    if not path.is_file():
+        raise AssetError("asset_not_found", "未找到资产", status_code=404)
+    stat = path.stat()
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    actual = _asset_digest_cache.get(key)
+    if actual is None:
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        _asset_digest_cache[key] = actual
+    if actual != digest:
+        raise AssetError("asset_not_found", "未找到资产", status_code=404)
+    return path
+
+
+def _inject_asset_urls(document: dict | None, task_id: str, total_images: int | None = None) -> dict | None:
+    """给图片补 asset_id 与签名地址；不写 base64，签名地址也不落盘。"""
+    if not isinstance(document, dict):
+        return document
+    images = document.get("images")
+    if not isinstance(images, list) or not images:
+        return document
+    limit = max(1, int(settings.asset_list_max))
+    total = total_images if isinstance(total_images, int) and total_images > 0 else len(images)
+    delivered: list[object] = []
+    for image in images[:limit]:
+        if not isinstance(image, dict):
+            delivered.append(image)
+            continue
+        item = dict(image)
+        digest = item.get("sha256")
+        if isinstance(digest, str) and len(digest) == 64:
+            asset_id = asset_id_from_sha256(digest)
+            item["asset_id"] = asset_id
+            if settings.asset_delivery == "url":
+                try:
+                    url, expires_at = asset_url_provider.url_for(task_id, asset_id)
+                    inline_url, _ = asset_url_provider.url_for(task_id, asset_id, inline=True)
+                    item["url"] = url
+                    item["inline_url"] = inline_url
+                    item["url_expires_at"] = datetime.fromtimestamp(expires_at, timezone.utc).isoformat().replace("+00:00", "Z")
+                except AssetError as exc:
+                    item["asset_delivery_error"] = exc.code
+        delivered.append(item)
+    result = dict(document)
+    result["images"] = delivered
+    result["images_total"] = total
+    result["images_truncated"] = total > len(delivered)
+    return result
 
 
 def _quality_report(document: dict | None, warnings: list[str]) -> tuple[dict, dict]:
@@ -287,6 +387,7 @@ async def run_parse_intent(record: TaskRecord) -> TaskResultEnvelope:
     public_artifacts = [item.model_dump(mode="json") | {"download_url": f"/api/v1/tasks/{record.task_id}/artifacts/{item.artifact_id}"} for item in artifacts[:100]]
     status = "succeeded" if result["status"] == "success" else "partial" if result["status"] == "partial" else "failed"
     quality, provenance = full_quality, full_provenance
+    document = _inject_asset_urls(document, record.task_id, total_images=(full_quality or {}).get("images"))
     return TaskResultEnvelope(status=status, file_id=record.file_id, document=document, result_ref=result_ref, artifacts=public_artifacts,
                               steps=[step.model_dump(mode="json")], warnings=warnings,
                               metrics=dict(result.get("metrics") or {}), quality=quality, provenance=provenance,
@@ -535,6 +636,31 @@ async def download_artifact(task_id: str, artifact_id: str) -> FileResponse:
     if path is None:
         raise HTTPException(status_code=404, detail={"code": "artifact_not_found", "message": "未找到 artifact"})
     return FileResponse(path, filename=path.name)
+
+
+@app.get("/api/v1/tasks/{task_id}/assets/{asset_id}", tags=["任务"])
+async def get_task_asset(task_id: str, asset_id: str, exp: int = Query(...), sig: str = Query(...),
+                         format: str = Query(default="binary")) -> Response:
+    """签名资产地址：返回图片二进制，或按 format=data-uri 返回内联数据。"""
+    try:
+        digest = sha256_from_asset_id(asset_id)
+        asset_signer.verify(task_id, asset_id, exp, sig)
+        if settings.asset_delivery == "none":
+            raise AssetError("asset_delivery_disabled", "资产投递已关闭")
+        workspace = artifact_repository.root / task_id / "files"
+        if not workspace.is_dir():
+            raise AssetError("asset_not_found", "未找到资产", status_code=404)
+        entry = (await asyncio.to_thread(_asset_index, workspace)).get(digest)
+        if entry is None:
+            raise AssetError("asset_not_found", "未找到资产", status_code=404)
+        path = await asyncio.to_thread(_resolve_asset_path, workspace, entry["relative_path"], digest)
+        if format == "data-uri":
+            payload = await asyncio.to_thread(encode_data_uri, path, entry["mime_type"], settings.asset_inline_max_bytes)
+            return JSONResponse(payload)
+        max_age = max(1, exp - int(datetime.now().timestamp()))
+        return FileResponse(path, media_type=entry["mime_type"], headers={"Cache-Control": f"private, max-age={max_age}"})
+    except AssetError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message}) from exc
 
 
 @app.get("/api/v1/metrics", tags=["系统"])
