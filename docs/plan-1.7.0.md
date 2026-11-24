@@ -7,6 +7,7 @@
 ## 目标与边界
 
 - 一次解析、多种导出：Markdown、HTML、LaTeX、DOCX、EPUB、PDF、结构化 JSON，并支持对已完成的旧任务补导出，无需重解析。
+- 公式口径按实测校正：DOCX 为 OMML，HTML 为 LaTeX 定界符 + `docvortex-math` 类（供 MathJax 客户端渲染，**不是服务端 MathML**），LaTeX 为公式源码。
 - 可选解析引擎：`pdf.normal.docvortex` 作为**可选** Provider，默认值不变。
 - 两项能力共用 `parseflow[rich-export]` extra；未安装时能力如实降级，不伪装成功。
 - 不改变 v1 既有字段语义；新增导出入口必须受 `API_KEY` 保护且不泄露服务器路径。
@@ -30,6 +31,16 @@ DocumentResult -> MiddleJson -> docvortex.render.render() -> RenderOutput
 - 资产：把我们 artifact 中的图片按引用物化到临时素材目录并校验 SHA256；缺失素材报错，不静默丢图。
 - 映射失败或渲染异常必须显式降级到内置 markdown 并记录 warning，不得返回空结果。
 - 依赖锁定小版本（`docvortex>=0.6.26,<0.7`）；升级需重跑导出基准与契约测试。
+- 安装体积基线：site-packages 约 281 MB / 93 个包（docvortex 22 MB、onnxruntime 85 MB、numpy 34 MB）。即使只用渲染也会拉入 onnxruntime，必须走 optional extra。
+
+### IR 映射约束（阶段 0 实测，必须满足）
+
+1. 顶层块必须带 `index`；子块 `index` 必须等于父块 `index`。
+2. 声明 `file_suffix="pdf"` 时顶层块必须带归一化 bbox（0..1）；无几何信息的来源需改判来源类型或合成 bbox，不能伪造像素坐标。
+3. 图片只接受 `data:image/...;base64` 或相对 sidecar 路径；我们的 artifact 绝对路径必须转换后传入。
+4. `MiddleJson` 必须显式给 `is_full_document`。
+5. 表格正文是 HTML 字符串，不是单元格数组；我们的 `tables[].rows` 需先序列化为 HTML 表。
+6. PDF 导出缺 `extensions.docvortex_layout` 时回退 reflow；需要原始版式时须带该扩展，否则结果应标注为语义重排。
 
 ### 旧任务补导出
 
@@ -82,8 +93,8 @@ DocumentResult -> MiddleJson -> docvortex.render.render() -> RenderOutput
 
 **导出（A 组）**
 
-- 同一任务可导出 7 种格式；DOCX 中公式为可编辑 OMML，HTML 为 MathML，LaTeX 为公式源码。
-- EPUB 可在主流阅读器打开且章节层级正确；PDF 正文可选择、表格为可选中文字的结构表。
+- 同一任务可导出 7 种格式；DOCX 中公式为可编辑 OMML，HTML 为 LaTeX 定界符（MathJax 可渲染），LaTeX 为公式源码。
+- EPUB 可在主流阅读器打开且章节层级正确；PDF 正文可选择、表格为可选中文字的结构表；HTML 公式为 LaTeX 定界符（MathJax 可渲染）；LaTeX 表格可编译（需 `longtable`、`colortbl`）。
 - 旧任务可补导出且不读取源文件；仅有预览的任务如实报不支持。
 - 未安装 `rich-export` 时能力列表如实降级，导出请求返回明确错误码。
 - 导出体积、耗时、峰值内存有实测记录；超限路径返回显式错误；无路径泄露。

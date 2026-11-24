@@ -15,13 +15,15 @@
 
 ## 阶段 0：可行性验证（门禁，未通过则阻断 v1.7.0）
 
+**结论（2026-11-24）：已通过**，7/7 格式由外部构造的 `MiddleJson` 渲染成功，脚本见 [`scripts/spike_docvortex_render.py`](../scripts/spike_docvortex_render.py)，结果见 [决策记录第 6 节](docvortex-adoption.md#6-阶段-0-验证结论2026-11-24通过)。以下为原验证口径。
+
 脚本 `scripts/spike_docvortex_render.py`，不进入产品依赖：
 
 1. 手工构造最小 `MiddleJson`（1 页、1 段、1 表、1 图），调用 `docvortex.render.render()`；
 2. 逐格式尝试 markdown / html / latex / docx / epub / pdf / structured_content；
 3. 记录安装体积、依赖树、失败原因；结论写入决策记录第 6 节。
 
-通过条件：不读源文件可渲染；至少 6 种格式成功；docx 公式为 OMML、html 为 MathML。
+通过条件：不读源文件可渲染；至少 6 种格式成功；docx 公式为 OMML、html 公式可被 MathJax 识别（LaTeX 定界符）。
 不通过则：v1.7.0 改为自研渲染器（python-docx / reportlab / markdown-it），公式链路单独立项。
 
 ## 阶段 1A：渲染层

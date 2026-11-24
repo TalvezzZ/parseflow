@@ -1,6 +1,6 @@
 # DocVortex 能力吸收决策记录
 
-状态：分析完成（2026-11-24）。阶段 0 可行性验证结论待补（见第 6 节）。
+状态：分析完成（2026-11-24）；阶段 0 可行性验证**通过**（见第 6 节）。
 
 本文记录对 [myhloli/DocVortex](https://github.com/myhloli/DocVortex) 的评估结论、吸收范围与不吸收范围，作为 1.6.1–1.8.0 各阶段方案的依据。结论基于其公开 README（中/英）、`pyproject.toml`、`docs/ARCHITECTURE.md`、`docs/JSON_PROTOCOL.md`、`docs/sdk-0.4.md`、PyPI 元数据与仓库结构；**未实跑其基准，未逐行审阅其 Rust 实现**。
 
@@ -90,11 +90,36 @@ A3 为单函数、无重依赖，可独立于 A1 先行验证；A1 是收益最�
 
 阶段 2 与阶段 3 合并的原因：两者共用同一个 optional extra、同一套 `DocumentResult ↔ MiddleJson` 映射代码与同一套验收环境，拆分只会制造两次发布而无新增交付价值。
 
-## 6. 阶段 0 验证结论（待补）
+## 6. 阶段 0 验证结论（2026-11-24，通过）
 
-验证脚本：`scripts/spike_docvortex_render.py`。需记录：
+**结论：通过。** 在不读取任何源文档的前提下，用外部构造的 `MiddleJson` 成功渲染出全部 7 种格式，技术赌点解除，v1.7.0 按借力方案推进（不改自研路线）。
 
-- 是否可在不读取源文件的前提下由外部构造的 `MiddleJson` 完成渲染；
-- 7 种输出格式的成功/失败清单与失败原因；
-- 安装后新增依赖树与磁盘体积；
-- 结论：通过（进入 v1.7.0 借力方案）或不通过（v1.7.0 改为自研 renderer，A2 单独立项）。
+验证脚本：[`scripts/spike_docvortex_render.py`](../scripts/spike_docvortex_render.py)。环境：docvortex 0.6.26、Python 3.12.12、macOS arm64、独立 venv（未进入项目依赖）。注意：本机直连 `files.pythonhosted.org` 超时，安装走清华镜像。
+
+### 6.1 结果
+
+| 格式 | 字节 | 耗时 | 结构抽查 |
+|---|---:|---:|---|
+| markdown | 473 | 74 ms | 表格 / 标题 / 图片 ✓ |
+| html | 14 020 | 103 ms | 表格 ✓ 公式 ✓ 图片 ✓ |
+| latex | 1 664 | 4 ms | `\begin{document}` / `longtable` / `frac` ✓ |
+| docx | 38 342 | 115 ms | OMML ✓ `w:tbl` ✓ `word/media` ✓ |
+| epub | 3 664 | 7 ms | `application/epub+zip` ✓ nav ✓ |
+| structured_content | 1 282 | 1 ms | 顶层键完整 ✓ |
+| pdf | 13 001 | 417 ms | `%PDF-` ✓ |
+
+`MiddleJson` 的 `to_dict()` / `from_dict()` 往返一致。
+
+### 6.2 接入约束（实测，映射层必须满足）
+
+1. 顶层块必须带 `index`；**子块 `index` 必须等于父块 `index`**（如 `table_body` 与 `table`）。
+2. `file_suffix="pdf"` 时顶层块必须带**归一化 bbox（0..1）**；像素坐标被拒绝。无几何信息的纯文本来源无法直接声明为 pdf。
+3. 图片只接受 `data:image/<type>;base64,...` 或**相对** sidecar 路径；绝对路径被安全校验拒绝。我们的 artifact 是绝对路径，必须转换。
+4. `MiddleJson` 必须显式给 `is_full_document`。
+5. 表格正文是 **HTML 字符串**（`TableBodyBlock.content`），不是单元格数组。
+6. PDF 导出缺少 `extensions.docvortex_layout` 时回退 `reflow` 并记录诊断；要保留原始版式必须带该扩展。
+7. HTML 的公式是 **LaTeX 定界符 + `docvortex-math` 类**（供 MathJax 客户端渲染），不是服务端 MathML；LaTeX 表格用 `longtable` + `\cellcolor`，渲染需 `colortbl` 宏包。
+
+### 6.3 体积
+
+site-packages 共 **281 MB / 93 个包**；docvortex 自身 22 MB，onnxruntime 85 MB、numpy 34 MB、lxml 20 MB、fontTools 20 MB、Pillow 13 MB、reportlab 8.8 MB。即使只用渲染也会拉入 onnxruntime，因此必须走 optional extra 隔离，不能进主依赖。
