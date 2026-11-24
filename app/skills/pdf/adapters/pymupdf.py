@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.documents.models import DocumentBlock, DocumentPage, DocumentResult, ParseContext, ProviderError
+from app.render import render_representations
 from app.skills.providers import Provider, ProviderManifest, ProviderResult
 
 
@@ -133,20 +134,7 @@ class PyMuPdfParserProvider(Provider):
         except Exception as exc:
             return self._failed("provider_failed", str(exc), retryable=True)
 
-        plain_text = "\n\n".join(page.text for page in pages if page.text)
-        if not plain_text.strip() and not images:
-            return self._failed("quality_insufficient", "PyMuPDF 未提取到文本或图片", retryable=False)
-        markdown = "\n\n---\n\n".join(
-            f"## 第 {page.page_number} 页\n\n{page.text}" if page.text else f"## 第 {page.page_number} 页"
-            for page in pages
-        )
         blocks = [block for page in pages for block in page.blocks]
-        metrics: dict[str, float | int | str] = {
-            "pages": len(pages),
-            "text_chars": len(plain_text),
-            "images": len(images),
-            "image_occurrences": image_occurrences,
-        }
         document = DocumentResult(
             document_id=context.file.file_id,
             source_file=context.file,
@@ -156,10 +144,21 @@ class PyMuPdfParserProvider(Provider):
             images=images,
             parser={"name": self.manifest.name, "version": self.manifest.version},
             metadata={"title": metadata.get("title")},
-            representations={"plain_text": plain_text, "markdown": markdown},
-            quality=metrics,
             warnings=warnings,
         )
+        # 表示统一由渲染层派生；默认策略与 1.6.0 的逐页标题输出字节一致。
+        rendered = render_representations(document, kinds=["plain_text", "markdown"])
+        document.representations = rendered.as_representations()
+        plain_text = (rendered.get("plain_text") or document.representations["plain_text"]).text
+        if not plain_text.strip() and not images:
+            return self._failed("quality_insufficient", "PyMuPDF 未提取到文本或图片", retryable=False)
+        metrics: dict[str, float | int | str] = {
+            "pages": len(pages),
+            "text_chars": len(plain_text),
+            "images": len(images),
+            "image_occurrences": image_occurrences,
+        }
+        document.quality = metrics
         return ProviderResult(
             status="partial" if warnings else "success",
             provider_name=self.manifest.name,

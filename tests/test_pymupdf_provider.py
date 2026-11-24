@@ -72,3 +72,35 @@ async def test_pymupdf_provider_extracts_more_than_200_distinct_images(tmp_path:
     assert len(result.document.images) == 201
     assert result.metrics["images"] == 201
     assert result.metrics["image_occurrences"] == 201
+
+
+@pytest.mark.asyncio
+async def test_pymupdf_representations_match_legacy_page_layout(tmp_path: Path) -> None:
+    """渲染层接管后，逐页标题与纯文本拼接必须与 1.6.0 的表达式字节一致。"""
+    source = tmp_path / "two-pages.pdf"
+    document = pymupdf.open()
+    first = document.new_page(width=300, height=300)
+    first.insert_text((20, 30), "Page one text")
+    document.new_page(width=300, height=300)  # 空白页：仍应输出页标题
+    document.save(source)
+    document.close()
+
+    result = await PyMuPdfParserProvider().parse(
+        ParseContext(
+            file=FileInput(file_id="file-legacy", path=str(source)),
+            metadata={"artifact_dir": str(tmp_path / "artifacts")},
+        )
+    )
+
+    assert result.document is not None
+    pages = result.document.pages
+    expected_markdown = "\n\n---\n\n".join(
+        f"## 第 {page.page_number} 页\n\n{page.text}" if page.text else f"## 第 {page.page_number} 页"
+        for page in pages
+    )
+    expected_plain_text = "\n\n".join(page.text for page in pages if page.text)
+
+    assert result.document.representations["markdown"] == expected_markdown
+    assert result.document.representations["plain_text"] == expected_plain_text
+    assert result.metrics["text_chars"] == len(expected_plain_text)
+    assert result.document.quality["text_chars"] == len(expected_plain_text)
