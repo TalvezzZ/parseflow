@@ -40,6 +40,14 @@ app/render/json.py        structured_content 投影
 - 渲染失败必须显式返回错误码，不得静默回退到空字符串；无可用渲染器时如实返回不支持。
 - 渲染只读 `DocumentResult`，不持有 Skill、Provider 或文件句柄。
 
+**迁移边界（实施中确认）**：渲染层只接管**可从文档结构派生**的表示。以下情况保留在 Provider 内，不强行下沉：
+
+- 解析器直接产出的 markdown（pdf-inspector、Mammoth 的 HTML→Markdown）：这是解析结果本身，渲染层只做透传。
+- 带页面级图片引用的 markdown（PaddleOCR 每页追加 `![第 N 页图片](路径)`）：需要渲染器支持按页分组图片后才能下沉，暂缓。
+- 源文本围栏（text/raw 来源）：与文件后缀、围栏长度相关，属于读取语义，不属于排版。
+
+判定规则：若下沉会导致输出字节变化或需要引入 Provider 私有数据，则该表示暂不下沉，并在 Provider 内保留注释说明原因。
+
 ## 阶段 1B：导出层拆分
 
 `app/tasks/exports.py` 保留为导出编排，排版交给渲染层：
