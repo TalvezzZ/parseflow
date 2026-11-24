@@ -72,7 +72,11 @@ class PlainTextRenderer:
         else:
             pages = document.get("pages")
             page_list = [page for page in pages if isinstance(page, Mapping)] if isinstance(pages, list) else []
-            parts = [page.get("text") for page in page_list if isinstance(page.get("text"), str) and page.get("text")]
+            parts = [
+                page.get("text")
+                for page in page_list
+                if isinstance(page.get("text"), str) and (page.get("text") or not options.plain_text_skip_empty)
+            ]
             text = options.page_block_separator.join(parts)
             renderer = "pages" if text else "empty"
             meta["pages"] = len(page_list)

@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 from app.documents.models import DocumentBlock, DocumentPage, DocumentResult, ParseContext, ProviderError
+from app.render import RenderOptions, render_representations
 from app.security.archive import validate_zip_archive
 from app.security.budgets import ResourceBudgetExceeded
 from app.skills.providers import Provider, ProviderManifest, ProviderResult
@@ -45,7 +46,6 @@ class PythonPptxProvider(Provider):
         blocks: list[DocumentBlock] = []
         tables: list[dict] = []
         images: list[dict] = []
-        markdown: list[str] = []
 
         def visit(shape, slide_number: int, slide_blocks: list[DocumentBlock], slide_lines: list[str]) -> None:
             if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
@@ -83,16 +83,26 @@ class PythonPptxProvider(Provider):
                 visit(shape, slide_number, slide_blocks, slide_lines)
             pages.append(DocumentPage(page_number=slide_number, text="\n".join(slide_lines), blocks=slide_blocks))
             blocks.extend(slide_blocks)
-            markdown.append(f"## Slide {slide_number}\n\n" + "\n\n".join(slide_lines))
 
         if not pages:
             return ProviderResult(status="failed", provider_name=self.manifest.name,
                                   error=ProviderError(code="quality_insufficient", message="PPT 未包含幻灯片", retryable=False))
         document = DocumentResult(document_id=context.file.file_id, source_file=context.file, document_type="pptx",
             pages=pages, blocks=blocks, tables=tables, images=images,
-            representations={"plain_text": "\n\n".join(page.text for page in pages), "markdown": "\n\n".join(markdown)},
             metadata={"artifact_dir": str(artifact_dir), "slide_count": len(pages), "slide_width": presentation.slide_width, "slide_height": presentation.slide_height},
             parser={"name": self.manifest.name, "version": self.manifest.version},
             quality={"slides": len(pages), "text_blocks": sum(1 for block in blocks if block.kind in {"text", "heading"}), "tables": len(tables), "images": len(images)},
             extensions={"presentation": {"slide_count": len(pages)}})
+        # 幻灯片表示由渲染层派生：标题用 "## Slide N"，正文取页内块，空页保留分隔符。
+        rendered = render_representations(
+            document,
+            kinds=["plain_text", "markdown"],
+            options=RenderOptions(
+                page_heading_template="## Slide {page}",
+                page_separator="\n\n",
+                body_source="blocks",
+                plain_text_skip_empty=False,
+            ),
+        )
+        document.representations = rendered.as_representations()
         return ProviderResult(status="success", provider_name=self.manifest.name, document=document, metrics=document.quality)

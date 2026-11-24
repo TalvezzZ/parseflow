@@ -10,6 +10,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from app.render import render_representations
+
 
 class ExportLimitExceeded(ValueError):
     pass
@@ -45,9 +47,10 @@ def generate_document_exports(document: dict[str, Any], workspace: Path, *, max_
         add_chunks(name, json.JSONEncoder(ensure_ascii=False, indent=2).iterencode(content))
 
     try:
-        representations = document.get("representations") if isinstance(document.get("representations"), dict) else {}
-        plain_text = str(representations.get("plain_text") or "")
-        markdown = str(representations.get("markdown") or plain_text)
+        # 排版归渲染层：已有表示透传，缺失时按页面派生；本函数只负责预算、暂存与原子发布。
+        rendered = render_representations(document, kinds=["plain_text", "markdown"])
+        plain_text = _artifact_text(rendered, "plain_text")
+        markdown = _artifact_text(rendered, "markdown") or plain_text
         excel_storage = document.get("metadata", {}).get("excel_storage") if isinstance(document.get("metadata"), dict) else None
         disk_workbook = (workspace / excel_storage["filename"]) if isinstance(excel_storage, dict) and excel_storage.get("filename") in {"workbook.sqlite", "workbook/manifest.json"} else None
         if disk_workbook is not None and disk_workbook.is_file():
@@ -89,6 +92,11 @@ def generate_document_exports(document: dict[str, Any], workspace: Path, *, max_
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+
+
+def _artifact_text(result: Any, kind: str) -> str:
+    artifact = result.get(kind)
+    return artifact.text if artifact is not None else ""
 
 
 def _sqlite_sheet_ids(path: Path) -> Iterator[int]:

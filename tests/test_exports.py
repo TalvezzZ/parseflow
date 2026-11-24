@@ -35,3 +35,13 @@ def test_xlsx_sanitizes_invalid_and_case_duplicate_sheet_names(tmp_path: Path) -
     document = {"tables": [{"name": "A/B", "rows": [[1]]}, {"name": "a_b", "rows": [[2]]}]}
     generate_document_exports(document, tmp_path, max_bytes=1024 * 1024)
     assert load_workbook(tmp_path / "exports/tables.xlsx", read_only=True).sheetnames == ["A_B", "a_b-2"]
+
+
+def test_missing_representations_are_derived_from_pages(tmp_path: Path) -> None:
+    """没有既有表示时由渲染层按页派生 markdown，而不是回退成纯文本。"""
+    document = {"document_type": "pdf", "pages": [{"page_number": 1, "text": "正文"}], "representations": {}}
+
+    generate_document_exports(document, tmp_path, max_bytes=1024 * 1024)
+
+    assert (tmp_path / "exports/document.md").read_text() == "## 第 1 页\n\n正文"
+    assert (tmp_path / "exports/document.txt").read_text() == "正文"

@@ -28,6 +28,19 @@ def _page_text(page: Mapping[str, Any]) -> str:
     return text if isinstance(text, str) else ""
 
 
+def _page_blocks_text(page: Mapping[str, Any], separator: str) -> str:
+    """页内块文本，按块顺序拼接；无文本块（如纯图片块）跳过。"""
+    blocks = page.get("blocks")
+    if not isinstance(blocks, list):
+        return ""
+    parts = [
+        block.get("text")
+        for block in blocks
+        if isinstance(block, Mapping) and isinstance(block.get("text"), str) and block.get("text")
+    ]
+    return separator.join(parts)
+
+
 def _page_number(page: Mapping[str, Any], fallback: int) -> int:
     number = page.get("page_number")
     return number if isinstance(number, int) else fallback
@@ -93,8 +106,13 @@ class MarkdownRenderer:
         sections: list[str] = []
         for index, page in enumerate(pages, start=1):
             number = _page_number(page, index)
-            text = _page_text(page)
             heading = options.page_heading_template.format(page=number)
+            if options.body_source == "blocks":
+                # 块来源（幻灯片等）结构上总是"标题 + 正文"，空正文也保留分隔符。
+                body = _page_blocks_text(page, options.page_block_separator)
+                sections.append(f"{heading}{options.page_block_separator}{body}")
+                continue
+            text = _page_text(page)
             if text:
                 sections.append(f"{heading}{options.page_block_separator}{text}")
             elif options.include_empty_pages:

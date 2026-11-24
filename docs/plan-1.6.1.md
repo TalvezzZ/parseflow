@@ -1,6 +1,6 @@
 # ParseFlow v1.6.1 技术方案：渲染层解耦与中文排版质量
 
-状态：进行中（2026-11-24）。已完成：阶段 0 门禁通过、渲染层契约与注册表、PyMuPDF 表示生成迁移（字节等价，含回归测试）。待完成：其余 Provider 迁移、导出层拆分、质量修复。依据见 [DocVortex 能力吸收决策记录](docvortex-adoption.md)。
+状态：进行中（2026-11-24）。已完成：阶段 0 门禁通过、渲染层契约与注册表、PyMuPDF 与 PPT 表示生成迁移（字节等价回归）、导出层改为调用渲染层。待完成：Excel/PaddleOCR 迁移（需要新增渲染能力）、CJK 空格默认开关、跨页表格。依据见 [DocVortex 能力吸收决策记录](docvortex-adoption.md)。
 
 版本定位：**PATCH**（见 [版本策略](versioning.md)）。本版本无对外新能力：输出格式不变、端点不变、默认链路不变。改的是结构（渲染层解耦）与缺陷（中文空格、跨页表格），外加向后兼容的附加字段。因此不升 MINOR。
 
@@ -47,6 +47,12 @@ app/render/json.py        structured_content 投影
 - 源文本围栏（text/raw 来源）：与文件后缀、围栏长度相关，属于读取语义，不属于排版。
 
 判定规则：若下沉会导致输出字节变化或需要引入 Provider 私有数据，则该表示暂不下沉，并在 Provider 内保留注释说明原因。
+
+**实施发现（2026-11-24）**：
+
+- Excel 的 markdown 需要按 sheet 分组并加 `- ` 前缀，属于结构化分组渲染，需新增渲染能力后才能下沉。
+- PaddleOCR 的 markdown 需要按页追加图片引用，需渲染器支持按页分组图片后才能下沉。
+- 跨页表格续接（`continues_prev`）目前**没有生产者**：现有 PDF Provider 不产出分页 `tables`（pdf-inspector 的表格在 markdown 内），Excel/PPT 表格不跨页。该项缺少数据来源，暂缓到出现真实跨页表格来源后再做，避免先加死字段。
 
 ## 阶段 1B：导出层拆分
 

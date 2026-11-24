@@ -35,7 +35,15 @@ class RenderOptions(BaseModel):
         description="分页来源的页标题模板；仅在没有既有表示时使用",
     )
     page_separator: str = Field(default="\n\n---\n\n", description="分页来源的页间分隔符")
-    page_block_separator: str = Field(default="\n\n", description="页内文本拼接分隔符")
+    page_block_separator: str = Field(default="\n\n", description="页内文本/块拼接分隔符")
+    body_source: Literal["text", "blocks"] = Field(
+        default="text",
+        description="页正文来源：text 用 page.text；blocks 用页内块文本（如幻灯片）",
+    )
+    plain_text_skip_empty: bool = Field(
+        default=True,
+        description="纯文本是否跳过空页；PDF 逐页来源跳过，幻灯片来源不跳过",
+    )
     include_empty_pages: bool = Field(
         default=True,
         description="无文本页面是否仍输出页标题",
