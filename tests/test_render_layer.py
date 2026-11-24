@@ -192,3 +192,169 @@ def test_artifact_size_bytes_is_utf8_length():
     )
     assert artifact is not None
     assert artifact.size_bytes == len("中文".encode("utf-8"))
+
+
+def _paged_document(pages, images=None) -> dict:
+    return {
+        "document_id": "doc-assets",
+        "document_type": "pdf",
+        "pages": pages,
+        "blocks": [],
+        "representations": {},
+        "images": images or [],
+    }
+
+
+def test_page_asset_links_follow_page_and_order():
+    """图片引用按页归组，并保持 images 列表原顺序。"""
+    document = _paged_document(
+        pages=[{"page_number": 1, "text": "第一页"}, {"page_number": 2, "text": "第二页"}],
+        images=[
+            {"page_number": 1, "relative_path": "images/a.png"},
+            {"page_number": 2, "relative_path": "images/b.png"},
+            {"page_number": 1, "relative_path": "images/c.png"},
+        ],
+    )
+    artifact = render_representations(
+        document, kinds=["markdown"], options=RenderOptions(page_asset_links=True)
+    ).get("markdown")
+
+    assert artifact is not None
+    assert artifact.text == (
+        "## 第 1 页\n\n第一页\n\n![第 1 页图片](images/a.png)\n\n![第 1 页图片](images/c.png)"
+        "\n\n---\n\n"
+        "## 第 2 页\n\n第二页\n\n![第 2 页图片](images/b.png)"
+    )
+
+
+def test_page_asset_links_reproduce_empty_body_layout():
+    """空正文 + 有图：复现 1.6.0 的前导分隔符（字节等价要求）。"""
+    document = _paged_document(
+        pages=[{"page_number": 1, "text": ""}],
+        images=[{"page_number": 1, "relative_path": "images/only.png"}],
+    )
+    artifact = render_representations(
+        document, kinds=["markdown"], options=RenderOptions(page_asset_links=True)
+    ).get("markdown")
+
+    assert artifact is not None
+    assert artifact.text == "## 第 1 页\n\n\n\n![第 1 页图片](images/only.png)"
+
+
+def test_page_asset_links_use_occurrences_when_page_number_absent():
+    document = _paged_document(
+        pages=[{"page_number": 1, "text": "正文"}],
+        images=[{"occurrences": [{"page_number": 1, "bbox": [0, 0, 1, 1]}], "relative_path": "images/occ.png"}],
+    )
+    artifact = render_representations(
+        document, kinds=["markdown"], options=RenderOptions(page_asset_links=True)
+    ).get("markdown")
+
+    assert artifact is not None
+    assert artifact.text.endswith("![第 1 页图片](images/occ.png)")
+
+
+def test_page_asset_links_skip_images_without_relative_path():
+    """只有绝对路径的图片不得写入结果，且必须留下警告。"""
+    document = _paged_document(
+        pages=[{"page_number": 1, "text": "正文"}],
+        images=[{"page_number": 1, "path": "/abs/secret.png"}],
+    )
+    artifact = render_representations(
+        document, kinds=["markdown"], options=RenderOptions(page_asset_links=True)
+    ).get("markdown")
+
+    assert artifact is not None
+    assert "/abs/secret.png" not in artifact.text
+    assert any(warning.startswith("asset_link_skipped") for warning in artifact.warnings)
+
+
+def test_page_asset_links_disabled_by_default():
+    document = _paged_document(
+        pages=[{"page_number": 1, "text": "正文"}],
+        images=[{"page_number": 1, "relative_path": "images/a.png"}],
+    )
+    artifact = render_representations(document, kinds=["markdown"]).get("markdown")
+
+    assert artifact is not None
+    assert "![" not in artifact.text
+
+
+def test_markdown_matches_paddle_legacy_layout():
+    """与 PaddleOCR 1.6.0 的页尾图片引用拼装逐字节一致。"""
+    pages = [
+        {"page_number": 1, "text": "第一页正文"},
+        {"page_number": 2, "text": ""},
+        {"page_number": 3, "text": "第三页正文"},
+    ]
+    images = [
+        {"page_number": 1, "relative_path": "images/p1-a.png"},
+        {"page_number": 1, "relative_path": "images/p1-b.png"},
+        {"page_number": 3, "relative_path": "images/p3-a.png"},
+    ]
+
+    by_page: dict[int, list[dict]] = {}
+    for image in images:
+        by_page.setdefault(image["page_number"], []).append(image)
+    parts = []
+    for page in pages:
+        body = page["text"]
+        for image in by_page.get(page["page_number"], []):
+            body += f"\n\n![第 {page['page_number']} 页图片]({image['relative_path']})"
+        parts.append(f"## 第 {page['page_number']} 页\n\n{body}" if body else f"## 第 {page['page_number']} 页")
+    expected = "\n\n---\n\n".join(parts)
+
+    artifact = render_representations(
+        _paged_document(pages, images), kinds=["markdown"], options=RenderOptions(page_asset_links=True)
+    ).get("markdown")
+
+    assert artifact is not None
+    assert artifact.text == expected
+
+
+def test_render_policy_off_by_default():
+    from app.render.policy import apply_render_policy
+
+    assert apply_render_policy().cjk_generated_space_removal is False
+
+
+def test_render_policy_follows_settings(monkeypatch):
+    from app.config import Settings
+    from app.render.policy import apply_render_policy
+
+    monkeypatch.setattr("app.config.get_settings", lambda: Settings(render_cjk_space_removal=True))
+
+    assert apply_render_policy().cjk_generated_space_removal is True
+
+
+def test_render_policy_does_not_disable_caller_option(monkeypatch):
+    from app.config import Settings
+    from app.render.policy import apply_render_policy
+
+    monkeypatch.setattr("app.config.get_settings", lambda: Settings(render_cjk_space_removal=False))
+    options = RenderOptions(cjk_generated_space_removal=True)
+
+    assert apply_render_policy(options).cjk_generated_space_removal is True
+
+
+def test_render_policy_survives_broken_settings(monkeypatch):
+    from app.render.policy import apply_render_policy
+
+    def boom():
+        raise RuntimeError("settings unavailable")
+
+    monkeypatch.setattr("app.config.get_settings", boom)
+
+    assert apply_render_policy().cjk_generated_space_removal is False
+
+
+def test_cjk_removal_applies_through_policy(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setattr("app.config.get_settings", lambda: Settings(render_cjk_space_removal=True))
+    document = _paged_document(pages=[{"page_number": 1, "text": "系 统 架 构"}])
+
+    artifact = render_representations(document, kinds=["markdown"]).get("markdown")
+
+    assert artifact is not None
+    assert "系统架构" in artifact.text

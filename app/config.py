@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     image_ocr_device: str = "cpu"
     image_ocr_lang: str = "ch"
     image_ocr_max_pixels: int = 20_000_000
+    ocr_layout_images_enabled: bool = True
+    # 渲染层：移除 CJK 字间生成空格。默认关闭以保持既有输出字节等价，
+    # 开启前需在真实中文语料上验证（见 docs/plan-1.6.1.md 阶段 1C）。
+    render_cjk_space_removal: bool = False
+    ocr_layout_model_name: str = "PP-DocLayout-M"
+    ocr_layout_threshold: float = Field(default=0.5, ge=0, le=1)
+    ocr_layout_max_total_size_mb: int = Field(default=50, ge=1, le=1024)
     word_normal_provider: str = "word.normal.mammoth"
     word_fallback_providers: str = ""
     office_converter_provider: str = "office.convert.libreoffice"
@@ -42,6 +49,10 @@ class Settings(BaseSettings):
     media_timeout_seconds: int = 300
     media_max_duration_seconds: int = 14400
     media_max_file_size_mb: int = 2048
+    media_max_output_size_mb: int = Field(default=512, ge=1)
+    media_min_free_mb: int = Field(default=128, ge=0)
+    media_num_threads: int = Field(default=2, ge=1, le=16)
+    media_max_concurrent_executions: int = Field(default=1, ge=1, le=8)
     excel_normal_provider: str = "excel.normal.openpyxl"
     excel_max_sheets: int = 30
     excel_max_semantic_cells: int = 10_000_000
@@ -75,6 +86,7 @@ class Settings(BaseSettings):
     data_dir: str = "./data"
     file_storage_dir: str = "./data/files"
     file_max_size_mb: int = 100
+    video_max_upload_size_mb: int = Field(default=500, ge=1)
     file_allowed_suffixes: str = ",".join(sorted({
         ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx",
         ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff",

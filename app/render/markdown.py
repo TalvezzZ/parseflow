@@ -53,6 +53,43 @@ def _pages(document: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [page for page in pages if isinstance(page, Mapping)]
 
 
+def _asset_pages(image: Mapping[str, Any]) -> list[int]:
+    """图片所属页：优先 page_number，其次 occurrences[].page_number（保序去重）。"""
+    pages: list[int] = []
+    single = image.get("page_number")
+    if isinstance(single, int):
+        pages.append(single)
+    occurrences = image.get("occurrences")
+    if isinstance(occurrences, list):
+        for occurrence in occurrences:
+            if isinstance(occurrence, Mapping):
+                page = occurrence.get("page_number")
+                if isinstance(page, int) and page not in pages:
+                    pages.append(page)
+    return pages
+
+
+def _page_asset_links(document: Mapping[str, Any], options: RenderOptions) -> tuple[dict[int, list[str]], int]:
+    """按页归组图片相对路径；返回 (页 -> 路径列表, 跳过数量)。"""
+    if not options.page_asset_links:
+        return {}, 0
+    images = document.get("images")
+    if not isinstance(images, list):
+        return {}, 0
+    grouped: dict[int, list[str]] = {}
+    skipped = 0
+    for image in images:
+        if not isinstance(image, Mapping):
+            continue
+        path = image.get("relative_path")
+        if not isinstance(path, str) or not path:
+            skipped += 1
+            continue
+        for page in _asset_pages(image):
+            grouped.setdefault(page, []).append(path)
+    return grouped, skipped
+
+
 def _blocks_text(document: Mapping[str, Any], separator: str) -> str:
     blocks = document.get("blocks")
     if not isinstance(blocks, list):
@@ -88,6 +125,10 @@ class MarkdownRenderer:
                 if not text:
                     warnings.append("markdown_empty: 文档既无既有表示，也无页面或块文本")
 
+        asset_links, skipped_assets = _page_asset_links(document, options)
+        if skipped_assets:
+            warnings.append(f"asset_link_skipped: {skipped_assets} 张图片缺少相对路径，未写入 markdown")
+
         if options.cjk_generated_space_removal:
             text, removed = strip_generated_cjk_spaces(text)
             meta["cjk_space_removed"] = removed
@@ -103,6 +144,7 @@ class MarkdownRenderer:
 
     def _from_pages(self, document: Mapping[str, Any], options: RenderOptions) -> tuple[str, int]:
         pages = _pages(document)
+        asset_links, _ = _page_asset_links(document, options)
         sections: list[str] = []
         for index, page in enumerate(pages, start=1):
             number = _page_number(page, index)
@@ -112,9 +154,13 @@ class MarkdownRenderer:
                 body = _page_blocks_text(page, options.page_block_separator)
                 sections.append(f"{heading}{options.page_block_separator}{body}")
                 continue
-            text = _page_text(page)
-            if text:
-                sections.append(f"{heading}{options.page_block_separator}{text}")
+            body = _page_text(page)
+            # 图片引用沿用既有拼装：每个引用前置分隔符。空正文 + 有图时因此保留前导分隔符，
+            # 这是 1.6.0 的实际产物，为字节等价刻意复现；如需修正在 v1.7.0 统一处理。
+            for path in asset_links.get(number, []):
+                body += options.asset_link_separator + options.asset_link_template.format(page=number, path=path)
+            if body:
+                sections.append(f"{heading}{options.page_block_separator}{body}")
             elif options.include_empty_pages:
                 sections.append(heading)
         return options.page_separator.join(sections), len(pages)

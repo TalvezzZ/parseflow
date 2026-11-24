@@ -44,6 +44,15 @@ class RenderOptions(BaseModel):
         default=True,
         description="纯文本是否跳过空页；PDF 逐页来源跳过，幻灯片来源不跳过",
     )
+    page_asset_links: bool = Field(
+        default=False,
+        description="是否在每页正文后追加该页图片引用（如 OCR 版面裁剪图）",
+    )
+    asset_link_template: str = Field(
+        default="![第 {page} 页图片]({path})",
+        description="图片引用模板；{page} 为页码，{path} 为相对路径",
+    )
+    asset_link_separator: str = Field(default="\n\n", description="正文与图片引用、引用之间的分隔符")
     include_empty_pages: bool = Field(
         default=True,
         description="无文本页面是否仍输出页标题",

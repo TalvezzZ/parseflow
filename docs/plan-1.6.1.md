@@ -1,6 +1,6 @@
 # ParseFlow v1.6.1 技术方案：渲染层解耦与中文排版质量
 
-状态：进行中（2026-11-24）。已完成：阶段 0 门禁通过、渲染层契约与注册表、PyMuPDF 与 PPT 表示生成迁移（字节等价回归）、导出层改为调用渲染层。待完成：Excel/PaddleOCR 迁移（需要新增渲染能力）、CJK 空格默认开关、跨页表格。依据见 [DocVortex 能力吸收决策记录](docvortex-adoption.md)。
+状态：进行中（2026-11-24）。已完成：阶段 0 门禁通过、渲染层契约与注册表、PyMuPDF / PaddleOCR / PPT 表示生成迁移（字节等价回归）、导出层改为调用渲染层、页面级图片引用能力、CJK 空格开关（`RENDER_CJK_SPACE_REMOVAL`，默认关闭）。待完成：Excel 迁移（需 sections 渲染能力）、CJK 开关的语料验证后默认值决策、跨页表格（无生产者，暂缓）。依据见 [DocVortex 能力吸收决策记录](docvortex-adoption.md)。
 
 版本定位：**PATCH**（见 [版本策略](versioning.md)）。本版本无对外新能力：输出格式不变、端点不变、默认链路不变。改的是结构（渲染层解耦）与缺陷（中文空格、跨页表格），外加向后兼容的附加字段。因此不升 MINOR。
 
@@ -52,6 +52,8 @@ app/render/json.py        structured_content 投影
 
 - Excel 的 markdown 需要按 sheet 分组并加 `- ` 前缀，属于结构化分组渲染，需新增渲染能力后才能下沉。
 - PaddleOCR 的 markdown 需要按页追加图片引用，需渲染器支持按页分组图片后才能下沉。
+- PaddleOCR 的按页图片引用能力已落地：`RenderOptions.page_asset_links` + 链接模板，按 `page_number`/`occurrences` 归组，缺相对路径的图片跳过并告警。空正文 + 有图时**刻意复现** 1.6.0 的前导分隔符以保证字节等价。
+- CJK 空格清理已接入全局策略（`app/render/policy.py` + `RENDER_CJK_SPACE_REMOVAL`），默认关闭。开启后同一开关对所有走渲染层的来源一次生效；默认值决策需要先在真实中文语料上统计误删率。
 - 跨页表格续接（`continues_prev`）目前**没有生产者**：现有 PDF Provider 不产出分页 `tables`（pdf-inspector 的表格在 markdown 内），Excel/PPT 表格不跨页。该项缺少数据来源，暂缓到出现真实跨页表格来源后再做，避免先加死字段。
 
 ## 阶段 1B：导出层拆分
