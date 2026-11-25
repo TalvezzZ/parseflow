@@ -1,5 +1,7 @@
 # ParseFlow
 
+**English** · [简体中文](README_zh-CN.md)
+
 > A local-first intelligent document parsing workbench for turning files into structured, usable content.
 
 ParseFlow accepts a single file, automatically selects an appropriate parsing workflow, and presents text, tables, Markdown, structured JSON, and generated artifacts in a web workbench. The backend is built with FastAPI and pluggable Skills; the frontend is a React/Vite application.
@@ -343,18 +345,18 @@ Available tools are `list_skills`, `preview_parse_plan`, `submit_file_id`, `get_
 The active roadmap and detailed release plans are maintained in:
 
 - [`docs/roadmap.md`](docs/roadmap.md) — current baseline, confirmed architecture decisions, and release sequence;
-- [`docs/plan-1.6.0.md`](docs/plan-1.6.0.md) — unified file results and full Excel coordinates (locally implemented and validated);
+- [`docs/plan-1.6.1.md`](docs/plan-1.6.1.md) — render layer extraction (implemented and released);
+- [`docs/plan-1.7.0.md`](docs/plan-1.7.0.md) — rich-format export and optional parsing engine (proposed);
+- [`docs/plan-1.6.0.md`](docs/plan-1.6.0.md) — unified file results and full Excel coordinates (released);
+- [`docs/versioning.md`](docs/versioning.md) — how version numbers are decided;
 - [`CHANGELOG.md`](CHANGELOG.md) — unreleased changes and compatibility notes;
-- [`docs/plan-0.7.1.md`](docs/plan-0.7.1.md) — current capability cleanup;
-- [`docs/plan-0.8.0.md`](docs/plan-0.8.0.md) — upload-only asynchronous API and local file task persistence;
-- [`docs/plan-0.8.1.md`](docs/plan-0.8.1.md) — security and deployment hardening;
-- [`docs/plan-0.9.0.md`](docs/plan-0.9.0.md) — task center, frontend tests, accessibility, and observability;
 - [`docs/plan-1.0.0.md`](docs/plan-1.0.0.md) — stable API, MCP, data, and release contracts.
 
 ## Architecture
 
 - `app/main.py` — FastAPI application and REST endpoints
 - `app/agent/` — automatic planning and task execution
+- `app/render/` — render layer: representation generation and layout (no disk writes)
 - `app/skills/` — Skill abstraction, providers, and parsers
 - `app/documents/` — normalized document/result models
 - `app/tasks/` — persistent task lifecycle, recovery, and artifact manifests
