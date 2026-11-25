@@ -67,8 +67,41 @@ app/render/json.py        structured_content 投影
 
 ## 阶段 1C：质量修复
 
-1. **中文生成空格**：在 `app/render/text.py` 实现 `is_generated_cjk_space(left, space, right)`，判据为连续源编号、中文边界、同向基线与字形间距；真实空格、英文词间空格、较大字段间距一律保留。仅对 PDF 来源生效，`metadata` 记录 `cjk_space_removed` 计数。
-2. **跨页表格**：`DocumentResult.tables[]` 新增 `continues_prev: bool`、`continues_next: bool`；markdown 渲染合并为单表并在 `metadata.merged_tables` 标注，JSON 投影保留原始分表。
+### 1C-1 中文生成空格：实测结论（2026-11-25，**暂不开启**）
+
+用真实中文 PDF 实测（`scripts/benchmark_cjk_spaces.py`），结论推翻了原假设。
+
+**语料**：`隐患通告` 6 份公告（89 页）+ `PMP常见知识分享` + `103_translation` + `2025新智元ASI前沿趋势报告`，共 60 页/文档上限、约 12.4 万字符。
+
+**字符级几何分类**（CJK ␣ CJK 候选共 52 处）：
+
+| 类别 | 数量 | 占比 | 说明 |
+|---|---:|---:|---|
+| 跨行/跨列字符流 | 29 | 55.8% | 间隙为负（-420 ~ -999pt），实际是换行后的字符流拼接 |
+| 大间隙 ≥0.20em | 21 | 40.4% | 典型 `面│措`（表格列边界），删除即合并跨列文本 |
+| 微间隙 <0.12em | 2 | 3.8% | 唯一真正像"生成空格"的形态（`某│个`、`我│们`） |
+
+**当前判据的误删率：96.2%。**
+
+端到端验证（`安全隐患信息公告 (第35期).pdf`，走真实 PyMuPDF Provider）：
+
+```text
+开关关闭：一、管理方面 措施        ← 正确，保留列边界
+开关开启：一、管理方面措施          ← 错误，表格跨列被合并
+```
+
+**结论**：字符级"汉字+空格+汉字"不足以判断生成空格，必须结合几何（同基线、间隙小于字宽某个比例）与结构（是否位于表格单元格内）。当前 `is_generated_cjk_space` 只做了字符判断，**不得默认开启**，默认值维持 `RENDER_CJK_SPACE_REMOVAL=false`。
+
+**后续条件**（满足才重启此项）：
+
+1. 判据加入几何条件：同基线 + `gap / font_size < 0.12` + 非表格单元格内；
+2. 在 ≥100 万字符语料上复测，误删率 <1%；
+3. 差异样例逐条人工确认后才允许改默认值。
+
+在那之前，配置项保留、默认关闭，文档如实说明"实验性"。
+
+1. **中文生成空格**：已实现 `is_generated_cjk_space` 与 `RENDER_CJK_SPACE_REMOVAL`，**默认关闭**；实测见 1C-1，判据需补几何与结构条件后才能重启，届时再决定默认值。
+2. **跨页表格**：暂缓（无生产者，见下方实施发现）。
 3. **schema 版本**：`result/manifest.json` 增加 `schema`（`parseflow.result`）与 `schema_version`（当前 1）；新增 `schemas/result-manifest-v1.json` 快照；旧 manifest 缺字段时按 1 读取。
 
 ## 执行顺序
