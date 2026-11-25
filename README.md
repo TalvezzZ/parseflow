@@ -4,7 +4,16 @@
 
 ParseFlow accepts a single file, automatically selects an appropriate parsing workflow, and presents text, tables, Markdown, structured JSON, and generated artifacts in a web workbench. The backend is built with FastAPI and pluggable Skills; the frontend is a React/Vite application.
 
-The working version is **1.6.0**, with unified result-file storage implemented and validated locally (backend 305 passed / 1 skipped; frontend 39 passed and production build passed). No GitHub release, tag, image publication, or production deployment was performed. The reserved [1.5.0 reliability plan](docs/plan-1.5.0.md) remains separate from the [1.6.0 storage plan](docs/plan-1.6.0.md).
+The working version is **1.6.1**, a PATCH release that extracts result representation
+generation into a render layer. No output format, endpoint, default provider or result
+field semantics changed; markdown and plain-text output is byte-identical to 1.6.0 for
+every migrated provider (PyMuPDF, PaddleOCR, PPT, Excel), verified by regression tests.
+The 1.6.0 unified result-file storage is unchanged. See the
+[render layer plan](docs/plan-1.6.1.md) and [version policy](docs/versioning.md).
+
+Validation for 1.6.1 (on the release commit): backend 357 passed / 1 skipped,
+frontend 39 passed, production build passed. Image publication and production
+deployment were not performed.
 
 ## Highlights
 
@@ -26,8 +35,31 @@ The working version is **1.6.0**, with unified result-file storage implemented a
 | Spreadsheets | XLS, XLSX, XLSM, CSV, TSV | Table and semantic cell extraction |
 | Presentations | PPT, PPTX | Slide text, tables, and images |
 | Text & structured data | TXT, MD, Markdown, HTML, HTM, XML, JSON, YAML, YML, INI, CFG, CONF, LOG, SQL, JS, TS, CSS | Specialized HTML/XML extraction where available; other allowlisted text formats preserve their source |
-| Audio | MP3, WAV, M4A, AAC, FLAC, OGG | Metadata probing and audio normalization; no ASR yet |
-| Video | MP4, MOV, MKV, AVI, WEBM | Metadata probing, audio extraction, and embedded-subtitle export when available; no ASR yet |
+| Audio | MP3, WAV, M4A, AAC, FLAC, OGG | Metadata and optional audio normalization (auto normalizes); no ASR |
+| Video | MP4, MOV, MKV, AVI, WEBM | Metadata, structured embedded text subtitles and playback-relative timeline; audio normalization only when requested; no ASR or visual inference |
+
+### Video and audio stages
+
+Video `auto` now probes metadata and extracts a suitable embedded **text subtitle** track without generating a WAV. A silent video can succeed with metadata/subtitles; metadata-only success does not mean its spoken or visual content was recognized. Standalone audio `auto` keeps normalization for compatibility. No ASR, frame OCR or visual model is enabled.
+
+Optional multipart fields on `POST /api/v1/tasks/parse`:
+
+- `media_audio_mode=auto|skip|normalize`: explicitly choose `normalize` to generate mono 16 kHz PCM WAV for a video.
+- `media_subtitle_mode=auto|skip|extract`: `extract` requests a subtitle result; an unavailable requested subtitle produces `partial` with stage reasons.
+- `audio_stream_index` / `subtitle_stream_index`: optional FFprobe global indexes, validated rather than silently falling back.
+- `subtitle_language`: optional track language tag (e.g. `zho` or `eng`); exact case-insensitive match. Explicit track index takes precedence.
+
+The task retains these options for retry. Results provide probe/subtitles/audio stage states, truthful `content_scope`, selected tracks and `subtitle_available`; `transcript_available=false` still means no ASR. Converted SRT, structured JSONL timeline, stage record and requested WAV are task-owned files. SRT is an exported representation, not necessarily the source track format; VTT output is not added in this phase.
+
+```http
+GET /api/v1/tasks/{task_id}/timeline?after_ms=0&after_index=-1&limit=100
+```
+
+Follow `next_cursor` verbatim. Composite `(start_ms, cue_index)` cursors preserve overlapping cues with equal start times. Timeline times are playback-relative, not absolute container packet PTS; source start time and duration basis are retained. Full resources remain discoverable in the result manifest. Bitmap/burned-in subtitles require future OCR and are explicitly reported unsupported.
+
+FFprobe/FFmpeg are cancellable subprocesses with a shared `MEDIA_TIMEOUT_SECONDS` deadline, bounded logs and private staging. `MEDIA_MAX_OUTPUT_SIZE_MB=512`, `MEDIA_MIN_FREE_MB=128`, `MEDIA_NUM_THREADS=2` and `MEDIA_MAX_CONCURRENT_EXECUTIONS=1` bound media work. The media concurrency cap is inside the existing global task queue; it does not introduce an independent fair scheduler. Video uploads default to **500 MiB** via `VIDEO_MAX_UPLOAD_SIZE_MB=500`; other files, including audio, retain `FILE_MAX_SIZE_MB=100`. The capabilities API exposes per-suffix limits so the workbench validates the same policy. These upload limits are independent of the provider's 2 GiB input budget. Unknown/nonfinite durations are rejected; unusual containers may report conservative duration estimates. Long-file capacity and per-segment resume are not claimed by the short-fixture tests.
+
+See [implementation plan and validation](docs/video-parsing-phase1.md).
 
 ### Unified result-file storage (1.6.0)
 
@@ -96,6 +128,12 @@ uv sync --group ocr
 ```
 
 When ParseFlow first processes a scanned or image-based PDF, or a standalone supported image, the `pdf.ocr.paddle` or `image.ocr.paddle` provider automatically initializes PaddleOCR and downloads its required OCR model files into PaddleOCR's local cache (normally `~/.paddlex/official_models`). Later requests reuse that local cache and do not require a cloud OCR service.
+
+The current working tree also enables image-region extraction in OCR routes using the standalone `LayoutDetection` module with `PP-DocLayout-M` (model file about 22.6 MB; runtime memory is larger). It does **not** initialize the full PP-StructureV3 pipeline: no formula, table-structure, chart-to-data, or image-caption model is loaded. Formula regions remain ordinary OCR text boxes; mathematical fidelity/LaTeX is not promised.
+
+`OCR_LAYOUT_IMAGES_ENABLED=true` controls this stage. `OCR_LAYOUT_THRESHOLD=0.5` selects valid detections; **there is no crop-count limit**. `OCR_LAYOUT_MAX_IMAGES` is no longer used, including old environment overrides. Every qualifying nonduplicate detected image is cropped; neither candidate-box nor prediction-item counts silently truncate the detector output. `OCR_LAYOUT_MAX_TOTAL_SIZE_MB=50` remains a separate byte budget: disk/write/byte failures produce warnings and partial status rather than a false complete result. Task previews/artifact pagination do not limit the saved full image set. Detected illustration/photo/chart regions become image files with page-pixel boxes and source `layout_crop`. A chart crop is an image, not reconstructed chart data. Pages with image crops but no text can produce valid results. Detection failures preserve usable text with a warning/partial status; setting the flag to false restores text-only OCR. First use may download the layout model into the Paddle cache. The native PyMuPDF image path remains separate.
+
+See [scope and validation](docs/ocr-layout-images.md).
 
 When `PDF_NORMAL_PROVIDER=pdf.normal.pymupdf`, all embedded raster images are extracted without count or byte-size limits. Tune `PDF_OCR_MAX_PAGES`, `PDF_OCR_RENDER_SCALE`, and `PDF_OCR_MAX_PAGE_PIXELS` for scanned-PDF OCR, and `IMAGE_OCR_MAX_PIXELS` for standalone-image OCR. Set `PDF_OCR_ENABLED=false` or `IMAGE_OCR_ENABLED=false` to disable the corresponding OCR route.
 

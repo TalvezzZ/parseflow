@@ -1,6 +1,6 @@
 # ParseFlow v1.6.1 技术方案：渲染层解耦
 
-状态：实现完成（2026-11-25）。阶段 0 门禁通过；渲染层契约与注册表；PyMuPDF / PaddleOCR / PPT / Excel 表示生成全部迁移（字节等价回归）；导出层改为调用渲染层；页面级图片引用；工作簿 sheet 分组渲染；manifest schema 身份与版本；CJK 空格清理实测否决并移除。跨页表格无生产者，暂缓。依据见 [DocVortex 能力吸收决策记录](docvortex-adoption.md)。
+状态：已完成并验证（2026-11-25），待打 Tag。阶段 0 门禁通过；渲染层契约与注册表；PyMuPDF / PaddleOCR / PPT / Excel 表示生成全部迁移（字节等价回归）；导出层改为调用渲染层；页面级图片引用；工作簿 sheet 分组渲染；manifest schema 身份与版本；CJK 空格清理实测否决并移除。跨页表格无生产者，暂缓。依据见 [DocVortex 能力吸收决策记录](docvortex-adoption.md)。
 
 版本定位：**PATCH**（见 [版本策略](versioning.md)）。本版本无对外新能力：输出格式不变、端点不变、默认链路不变。改的是结构（渲染层解耦）与缺陷（中文空格、跨页表格），外加向后兼容的附加字段。因此不升 MINOR。
 

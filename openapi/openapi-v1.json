@@ -3,7 +3,7 @@
   "info": {
     "title": "Parse Agent",
     "description": "基于 LangChain 和 Skill 的文档解析 Agent",
-    "version": "1.6.0"
+    "version": "1.6.1"
   },
   "paths": {
     "/api/v1/tasks/{task_id}/result": {

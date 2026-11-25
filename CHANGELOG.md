@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.6.1 — 2026-11-25
+
+PATCH release. Internal restructuring only: no new output format, endpoint, configuration
+default or result field semantics. Markdown and plain-text output is byte-identical to
+1.6.0 for every migrated provider, verified by regression tests.
+
+### Render layer
+
+- Result representation generation moved out of providers into `app/render/`: contracts,
+  a per-kind renderer registry, and three built-in renderers (markdown, plain_text, json).
+- Renderers only read the document mapping; they hold no Skill, Provider or file handle
+  and perform no filesystem writes.
+- `generate_document_exports` now delegates layout to the render layer and keeps its byte
+  budget, staging directory, atomic publication and killable worker path unchanged.
+- Providers migrated with byte-identical output: PyMuPDF, PaddleOCR, PPT (python-pptx),
+  Excel (openpyxl). Providers whose representation is the parse result itself
+  (pdf-inspector, Mammoth, text/raw, single-image OCR, FFmpeg media) intentionally keep
+  producing it inline.
+
+### Additions
+
+- Page-level asset links: `RenderOptions.page_asset_links` groups images by page and
+  appends references at page end, reproducing the existing PaddleOCR layout. Images
+  without a relative path are skipped with a warning instead of leaking absolute paths.
+- Workbook sheet grouping: `body_source="sheet"` renders `## {sheet}` plus `- {row}`
+  lines, skips empty sheets, and derives grouping from `blocks[].metadata.sheet`.
+- `result/manifest.json` now declares `schema` (`parseflow.result`) and `schema_version`.
+  `result_ref` declares the same protocol. Manifests without `schema` remain readable.
+- `schemas/result-manifest-v1.json` snapshot plus a consistency test.
+
+### Rejected
+
+- CJK generated-space removal was implemented, measured on 144k characters of real
+  Chinese PDFs (96.2% false-deletion rate: table column boundaries and cross-line
+  character streams were indistinguishable from generated spaces), and then removed
+  entirely, including its option, config entry and helper module.
+
+### Validation
+
+Measured on the release commit, not on a working tree with unrelated in-progress work.
+
+- Backend: 357 passed / 1 skipped.
+- Frontend: 39 passed, production build passed.
+- Image publication and production deployment were not performed.
+
+## Unreleased — image-region extraction
+
+- Add optional lightweight PP-DocLayout-M detection to PDF/image OCR, saving bounded region crops with page-pixel coordinates and file references. No full PP-StructureV3 or formula/vision model is loaded.
+- Crop all qualifying nonduplicate image detections without a crop-count, candidate-box-count or prediction-item-count cap. Artifact pagination/preview limits do not truncate saved images; byte/disk errors remain explicit.
+- Preserve formula content as ordinary OCR text; accept image-only results when crops are present. Existing native PDF image extraction remains separate.
+- See `docs/ocr-layout-images.md` for scope, budgets and validation.
+
+## Unreleased — video parsing phase 1
+
+- Independently probe video metadata, extract structured text subtitles and optionally normalize audio; video auto no longer creates a WAV or fails solely because it has no audio track. Standalone audio auto keeps normalization.
+- Add validated/persisted multipart media modes, subtitle language and stream indexes, retained on retry.
+- Replace blocking-thread FFmpeg calls with cancellable subprocesses, shared deadline, bounded logs, runtime disk/output budgets and atomic media output publication.
+- Add playback-relative subtitle timeline JSONL and composite-cursor paging, stage/content-scope overview, media upload controls and lazy timeline UI. No ASR, visual OCR, VTT or frame-analysis claim.
+- Existing version/tag stays unchanged until an explicit release request. See `docs/video-parsing-phase1.md` for validation and scope.
+
 ## 1.6.0 — 2026-11-15
 
 Implemented and validated locally on 2026-11-15; version metadata is aligned to 1.6.0. This version is prepared for the `v1.6.0` Git tag. GitHub Release creation, image publication and production deployment are separate operations. The reserved 1.5.0 reliability/supply-chain plan remains documented separately.
