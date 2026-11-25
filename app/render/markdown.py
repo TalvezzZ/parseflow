@@ -12,7 +12,6 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from app.render.contracts import DEFAULT_MEDIA_TYPES, RenderArtifact, RenderOptions
-from app.render.text import strip_generated_cjk_spaces
 
 
 def _representation(document: Mapping[str, Any], kind: str) -> str:
@@ -128,10 +127,6 @@ class MarkdownRenderer:
         asset_links, skipped_assets = _page_asset_links(document, options)
         if skipped_assets:
             warnings.append(f"asset_link_skipped: {skipped_assets} 张图片缺少相对路径，未写入 markdown")
-
-        if options.cjk_generated_space_removal:
-            text, removed = strip_generated_cjk_spaces(text)
-            meta["cjk_space_removed"] = removed
 
         return RenderArtifact(
             kind=self.kind,

@@ -57,10 +57,8 @@ class RenderRegistry:
         options: RenderOptions | None = None,
     ) -> RenderResult:
         """渲染请求的表示；缺失的表示记入 missing，不静默跳过。"""
-        from app.render.policy import apply_render_policy
-
         payload = normalize_document(document)
-        opts = apply_render_policy(options)
+        opts = options or RenderOptions()
         requested = list(kinds) if kinds is not None else self.available()
         result = RenderResult()
         for kind in requested:

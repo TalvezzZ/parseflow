@@ -38,12 +38,12 @@
 |---|---|---|---|
 | A1 | 7 格式渲染门面 | 当前只能出 md/txt/json/csv | `app/render/renderers/docvortex.py` |
 | A2 | 数学公式链路（LaTeX/MathML/OMML） | 公式在 DOCX/HTML/LaTeX 中不可用 | 随 A1 到位 |
-| A3 | `is_generated_cjk_space` 判据 | 中文 PDF 抽取的字间多余空格 | `app/render/text.py` |
+| A3 | ~~`is_generated_cjk_space` 判据~~ **已否决** | 中文 PDF 抽取的字间多余空格 | 实测误删率 96.2%，判据不可靠；见 plan-1.6.1 的 1C-1 |
 | A4 | 表格续接 `continues_prev` + 表格区域恢复 | 跨页表格被切断且无合并语义 | `DocumentResult.tables[]` |
 | A5 | ODF/EPUB/OFD/MHTML 输入分析 | 格式清单四个空洞（OFD 对政企尤重） | 新增 Provider 适配器 |
 | A6 | Tagged PDF / PDF-UA 语义与阅读顺序 | 多栏、脚注、跨页段落顺序不稳 | `pdf.normal.docvortex` 可选 Provider |
 
-A3 为单函数、无重依赖，可独立于 A1 先行验证；A1 是收益最大项。
+A1 是收益最大项。A3（CJK 空格判据）经实测否决：字符级判据无法区分生成空格与表格列边界，误删率 96.2%，已从代码中移除。
 
 ### 3.2 设计借鉴（不引入依赖）
 

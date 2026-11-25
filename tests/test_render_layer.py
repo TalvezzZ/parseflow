@@ -5,7 +5,6 @@ import pytest
 from app.documents.models import DocumentBlock, DocumentPage, DocumentResult, FileInput
 from app.render import RenderOptions, default_registry, render_representations
 from app.render.registry import RenderRegistry
-from app.render.text import is_generated_cjk_space, strip_generated_cjk_spaces
 
 
 def _document(pages, representations=None, blocks=None) -> dict:
@@ -84,47 +83,6 @@ def test_json_matches_existing_export_encoding():
     assert artifact is not None
     assert artifact.text == expected
     assert "\\u4e2d" not in artifact.text
-
-
-def test_cjk_generated_space_removal_is_opt_in():
-    pages = [{"page_number": 1, "text": "中 文 字 and hello world 第 1 页"}]
-
-    default = render_representations(_document(pages), kinds=["markdown"]).get("markdown")
-    assert default is not None
-    assert "中 文 字" in default.text
-
-    cleaned = render_representations(
-        _document(pages),
-        kinds=["markdown"],
-        options=RenderOptions(cjk_generated_space_removal=True),
-    ).get("markdown")
-    assert cleaned is not None
-    assert "中文字" in cleaned.text
-    assert "hello world" in cleaned.text  # 英文词间空格保留
-    assert "第 1 页" in cleaned.text  # 数字相邻空格保留
-    assert cleaned.meta["cjk_space_removed"] == 2
-
-
-@pytest.mark.parametrize(
-    ("left", "space", "right", "expected"),
-    [
-        ("中", " ", "文", True),
-        ("あ", " ", "い", True),
-        ("a", " ", "b", False),
-        ("中", "  ", "文", False),
-        ("中", "\t", "文", False),
-        ("中", " ", "1", False),
-        ("。", " ", "文", False),
-    ],
-)
-def test_is_generated_cjk_space(left, space, right, expected):
-    assert is_generated_cjk_space(left, space, right) is expected
-
-
-def test_strip_generated_cjk_spaces_counts_removals():
-    text, removed = strip_generated_cjk_spaces("这 是 测试，hello world")
-    assert text == "这是测试，hello world"
-    assert removed == 2
 
 
 def test_unknown_kind_is_reported_not_silently_skipped():
@@ -310,51 +268,3 @@ def test_markdown_matches_paddle_legacy_layout():
 
     assert artifact is not None
     assert artifact.text == expected
-
-
-def test_render_policy_off_by_default():
-    from app.render.policy import apply_render_policy
-
-    assert apply_render_policy().cjk_generated_space_removal is False
-
-
-def test_render_policy_follows_settings(monkeypatch):
-    from app.config import Settings
-    from app.render.policy import apply_render_policy
-
-    monkeypatch.setattr("app.config.get_settings", lambda: Settings(render_cjk_space_removal=True))
-
-    assert apply_render_policy().cjk_generated_space_removal is True
-
-
-def test_render_policy_does_not_disable_caller_option(monkeypatch):
-    from app.config import Settings
-    from app.render.policy import apply_render_policy
-
-    monkeypatch.setattr("app.config.get_settings", lambda: Settings(render_cjk_space_removal=False))
-    options = RenderOptions(cjk_generated_space_removal=True)
-
-    assert apply_render_policy(options).cjk_generated_space_removal is True
-
-
-def test_render_policy_survives_broken_settings(monkeypatch):
-    from app.render.policy import apply_render_policy
-
-    def boom():
-        raise RuntimeError("settings unavailable")
-
-    monkeypatch.setattr("app.config.get_settings", boom)
-
-    assert apply_render_policy().cjk_generated_space_removal is False
-
-
-def test_cjk_removal_applies_through_policy(monkeypatch):
-    from app.config import Settings
-
-    monkeypatch.setattr("app.config.get_settings", lambda: Settings(render_cjk_space_removal=True))
-    document = _paged_document(pages=[{"page_number": 1, "text": "系 统 架 构"}])
-
-    artifact = render_representations(document, kinds=["markdown"]).get("markdown")
-
-    assert artifact is not None
-    assert "系统架构" in artifact.text

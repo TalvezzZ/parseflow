@@ -57,10 +57,6 @@ class RenderOptions(BaseModel):
         default=True,
         description="无文本页面是否仍输出页标题",
     )
-    cjk_generated_space_removal: bool = Field(
-        default=False,
-        description="移除 PDF 生成的 CJK 字间空格；默认关闭以保持 1.6.0 字节等价",
-    )
 
 
 class RenderArtifact(BaseModel):
