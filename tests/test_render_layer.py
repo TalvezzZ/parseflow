@@ -268,3 +268,65 @@ def test_markdown_matches_paddle_legacy_layout():
 
     assert artifact is not None
     assert artifact.text == expected
+
+
+def _workbook_document(sheets) -> dict:
+    """sheets: [(name, [row_text, ...]), ...]"""
+    blocks = []
+    for name, rows in sheets:
+        blocks.append({"kind": "heading", "text": name, "metadata": {"sheet": name, "sheet_id": 0}})
+        for row in rows:
+            blocks.append({"kind": "text", "text": row, "metadata": {"sheet": name, "row": 0}})
+    return {"document_id": "wb-1", "document_type": "xlsx", "blocks": blocks, "representations": {}}
+
+
+def test_sheet_mode_matches_legacy_excel_layout():
+    """与 1.6.0 Excel 的拼装逐字节一致：sheet 标题 + 每行 '-' 前缀。"""
+    document = _workbook_document([
+        ("Sheet1", ["姓名 | 年龄", "张三 | 30"]),
+        ("Sheet2", ["产品 | 单价"]),
+    ])
+
+    artifact = render_representations(
+        document, kinds=["markdown"], options=RenderOptions(body_source="sheet")
+    ).get("markdown")
+
+    assert artifact is not None
+    assert artifact.text == "## Sheet1\n\n- 姓名 | 年龄\n- 张三 | 30\n\n## Sheet2\n\n- 产品 | 单价"
+
+
+def test_sheet_mode_skips_empty_sheet():
+    document = _workbook_document([("Empty", []), ("Data", ["a | b"])])
+
+    artifact = render_representations(
+        document, kinds=["markdown"], options=RenderOptions(body_source="sheet")
+    ).get("markdown")
+
+    assert artifact is not None
+    assert "Empty" not in artifact.text
+    assert artifact.text == "## Data\n\n- a | b"
+
+
+def test_sheet_mode_include_empty_when_disabled_skip():
+    document = _workbook_document([("Empty", []), ("Data", ["a"])])
+
+    artifact = render_representations(
+        document,
+        kinds=["markdown"],
+        options=RenderOptions(body_source="sheet", sheet_skip_empty=False),
+    ).get("markdown")
+
+    assert artifact is not None
+    assert artifact.text == "## Empty\n\n\n\n## Data\n\n- a"
+
+
+def test_sheet_mode_reports_no_content():
+    artifact = render_representations(
+        {"document_type": "xlsx", "blocks": [], "representations": {}},
+        kinds=["markdown"],
+        options=RenderOptions(body_source="sheet"),
+    ).get("markdown")
+
+    assert artifact is not None
+    assert artifact.renderer == "empty"
+    assert any("markdown_empty" in warning for warning in artifact.warnings)

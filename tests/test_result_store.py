@@ -242,3 +242,65 @@ async def test_async_marker_cancellation_removes_even_late_published_result(tmp_
     with pytest.raises(store.ResultWriteCancelled):
         await store.publish_result_async(tmp_path, {"text": "safe"}, cancel_path=cancel_path)
     assert not (tmp_path / "result").exists()
+
+
+def test_manifest_declares_schema_identity(tmp_path):
+    """结果目录必须带 schema 身份与版本，便于读者判断协议。"""
+    from app.tasks.result_store import RESULT_MANIFEST_SCHEMA, RESULT_MANIFEST_VERSION, publish_result
+
+    publish_result(tmp_path, {"document_type": "pdf", "pages": []}, max_bytes=1024 * 1024)
+
+    manifest = json.loads((tmp_path / "result" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema"] == RESULT_MANIFEST_SCHEMA
+    assert manifest["schema_version"] == RESULT_MANIFEST_VERSION
+
+
+def test_legacy_manifest_without_schema_still_reads(tmp_path):
+    """旧 manifest 没有 schema 字段；不得因此拒绝已有任务。"""
+    from app.tasks.result_store import load_result_manifest
+
+    (tmp_path / "result").mkdir(parents=True)
+    payload = {"schema_version": 1, "document_type": "pdf", "units": [], "representations": {}, "resources": []}
+    (tmp_path / "result" / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    assert load_result_manifest(tmp_path)["schema_version"] == 1
+
+
+def test_unknown_schema_identity_rejected(tmp_path):
+    from app.tasks.result_store import ResultStorageError, load_result_manifest
+
+    (tmp_path / "result").mkdir(parents=True)
+    payload = {"schema": "other.protocol", "schema_version": 1, "document_type": "pdf",
+               "units": [], "representations": {}, "resources": []}
+    (tmp_path / "result" / "manifest.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ResultStorageError):
+        load_result_manifest(tmp_path)
+
+
+def test_schema_snapshot_matches_published_manifest(tmp_path):
+    """快照与真实产物必须一致，避免文档漂移。"""
+    import json as _json
+    from pathlib import Path as _Path
+
+    from app.tasks.result_store import publish_result
+
+    publish_result(tmp_path, {"document_type": "pdf", "pages": []}, max_bytes=1024 * 1024)
+    manifest = _json.loads((tmp_path / "result" / "manifest.json").read_text(encoding="utf-8"))
+    snapshot = _json.loads((_Path(__file__).resolve().parents[1] / "schemas/result-manifest-v1.json").read_text())
+
+    for field in snapshot["required"]:
+        assert field in manifest
+    assert manifest["schema"] == snapshot["properties"]["schema"]["const"]
+    assert manifest["schema_version"] == snapshot["properties"]["schema_version"]["const"]
+
+
+def test_result_ref_declares_same_protocol_as_manifest(tmp_path):
+    """result_ref 与 manifest 必须声明同一协议，客户端才能统一校验。"""
+    from app.tasks.result_store import publish_result
+
+    _, result_ref = publish_result(tmp_path, {"document_type": "pdf", "pages": []}, max_bytes=1024 * 1024)
+    manifest = json.loads((tmp_path / "result" / "manifest.json").read_text(encoding="utf-8"))
+
+    assert result_ref["schema"] == manifest["schema"]
+    assert result_ref["schema_version"] == manifest["schema_version"]

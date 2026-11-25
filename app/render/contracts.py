@@ -36,13 +36,17 @@ class RenderOptions(BaseModel):
     )
     page_separator: str = Field(default="\n\n---\n\n", description="分页来源的页间分隔符")
     page_block_separator: str = Field(default="\n\n", description="页内文本/块拼接分隔符")
-    body_source: Literal["text", "blocks"] = Field(
+    body_source: Literal["text", "blocks", "sheet"] = Field(
         default="text",
-        description="页正文来源：text 用 page.text；blocks 用页内块文本（如幻灯片）",
+        description="正文来源：text 用 page.text；blocks 用页内块文本（幻灯片）；sheet 按块元数据分组（工作簿）",
     )
     plain_text_skip_empty: bool = Field(
         default=True,
         description="纯文本是否跳过空页；PDF 逐页来源跳过，幻灯片来源不跳过",
+    )
+    plain_text_block_separator: str = Field(
+        default="\n",
+        description="纯文本在无页面、仅有块时（如工作簿）的块拼接分隔符",
     )
     page_asset_links: bool = Field(
         default=False,
@@ -53,6 +57,10 @@ class RenderOptions(BaseModel):
         description="图片引用模板；{page} 为页码，{path} 为相对路径",
     )
     asset_link_separator: str = Field(default="\n\n", description="正文与图片引用、引用之间的分隔符")
+    sheet_title_template: str = Field(default="## {name}", description="工作簿分组标题模板")
+    sheet_row_template: str = Field(default="- {row}", description="工作簿每行模板")
+    sheet_cell_separator: str = Field(default=" | ", description="工作簿单元格分隔符")
+    sheet_skip_empty: bool = Field(default=True, description="无文本工作表是否跳过")
     include_empty_pages: bool = Field(
         default=True,
         description="无文本页面是否仍输出页标题",

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.documents.models import DocumentBlock, DocumentResult, ParseContext, ProviderError
+from app.render import RenderOptions, render_representations
 from app.skills.excel.streaming import local, records, relationships
 from app.skills.providers import Provider, ProviderManifest, ProviderResult
 
@@ -68,7 +69,7 @@ class OpenpyxlProvider(Provider):
         scan = self._pre_scan(source)
         artifact_dir = Path(str(context.metadata.get("artifact_dir") or tempfile.mkdtemp(prefix=f"parse-agent-{context.file.file_id}-xlsx-")))
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        sheets, tables, images, blocks, markdown, warnings = [], [], [], [], [], []
+        sheets, tables, images, blocks, warnings = [], [], [], [], []
         total_cells = truncated = preview_cells = 0
         truncation_reasons: set[str] = set()
         image_bytes = 0
@@ -340,7 +341,6 @@ class OpenpyxlProvider(Provider):
                         text = " | ".join(str(value) if value is not None else "" for value in row)
                         lines.append(text)
                         blocks.append(DocumentBlock(kind="text", text=text, metadata={"sheet": name, "row": number}))
-                    markdown.append(f"## {name}\n\n" + "\n".join(f"- {line}" for line in lines))
                 for rel in sheet_rels.values():
                     if rel["type"] != "drawing" or rel["external"]:
                         continue
@@ -384,11 +384,18 @@ class OpenpyxlProvider(Provider):
             warnings.append(f"excel_parse_truncated: 跳过 {truncated} 个超出预算的单元格或元数据项，原因: {', '.join(sorted(truncation_reasons))}")
         document = DocumentResult(document_id=context.file.file_id, source_file=context.file, document_type="xlsx",
             blocks=blocks, tables=tables, images=images,
-            representations={"plain_text": "\n".join(block.text for block in blocks if block.text), "markdown": "\n\n".join(markdown)},
+
             metadata={"artifact_dir": str(artifact_dir), "sheet_count": len(sheets), "archive": scan["archive"], "excel_storage": {"filename": "workbook/manifest.json", "schema_version": 2}, "sheets": sheets},
             parser={"name": self.manifest.name, "version": self.manifest.version}, warnings=warnings,
             quality={"sheets": len(sheets), "semantic_cells": total_cells, "tables": len(tables), "images": len(images), "truncated": int(truncated), "truncation_reason": ",".join(sorted(truncation_reasons)), "preview_truncated": int(any(sheet["preview_truncated"] for sheet in sheets))},
             provenance={"sheets": sheets}, extensions={"workbook": {"sheets": sheets}})
+        # 表示由渲染层派生：按 sheet 分组、每行 '-' 前缀，与既有拼装字节一致。
+        rendered = render_representations(
+            document,
+            kinds=["plain_text", "markdown"],
+            options=RenderOptions(body_source="sheet", page_heading_template="## {page}"),
+        )
+        document.representations = rendered.as_representations()
         return ProviderResult(status="partial" if truncated else "success", provider_name=self.manifest.name, document=document, warnings=warnings, metrics=document.quality)
 
     def _pre_scan(self, source: Path) -> dict[str, Any]:

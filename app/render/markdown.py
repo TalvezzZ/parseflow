@@ -101,6 +101,45 @@ def _blocks_text(document: Mapping[str, Any], separator: str) -> str:
     return separator.join(parts)
 
 
+def _sheet_sections(document: Mapping[str, Any], options: RenderOptions) -> str:
+    """按块元数据的 sheet 名分组，复现工作簿的既有 markdown 布局。
+
+    分组依据是 block.metadata.sheet（由 Excel Provider 写入），因此不需要
+    给 DocumentResult 增加新字段；同一 sheet 名按首次出现顺序输出。
+    """
+    blocks = document.get("blocks")
+    if not isinstance(blocks, list):
+        return ""
+    order: list[str] = []
+    grouped: dict[str, list[str]] = {}
+    for block in blocks:
+        if not isinstance(block, Mapping):
+            continue
+        metadata = block.get("metadata")
+        name = metadata.get("sheet") if isinstance(metadata, Mapping) else None
+        text = block.get("text")
+        if not isinstance(name, str) or not name:
+            continue
+        if name not in grouped:
+            order.append(name)
+            grouped[name] = []
+        # heading 块承载 sheet 名（标题已由模板输出），不重复计入行。
+        if block.get("kind") == "heading":
+            continue
+        if isinstance(text, str) and text:
+            grouped[name].append(options.sheet_row_template.format(row=text))
+    sections: list[str] = []
+    for name in order:
+        rows = grouped[name]
+        if not rows and options.sheet_skip_empty:
+            continue
+        title = options.sheet_title_template.format(name=name)
+        body = "\n".join(rows)
+        sections.append(f"{title}{options.page_block_separator}{body}")
+    # 工作簿分节用空行连接，与既有 Excel 拼装一致（不用页分隔符）。
+    return options.page_block_separator.join(sections)
+
+
 class MarkdownRenderer:
     """生成 markdown 表示。"""
 
@@ -114,6 +153,15 @@ class MarkdownRenderer:
         text = _representation(document, "markdown") if options.prefer_document_representation else ""
         if text:
             renderer = "document"
+        elif options.body_source == "sheet":
+            text = _sheet_sections(document, options)
+            renderer = "sheets" if text else "empty"
+            meta["sheets"] = len({str((block.get("metadata") or {}).get("sheet"))
+                                  for block in (document.get("blocks") or [])
+                                  if isinstance(block, Mapping) and isinstance(block.get("metadata"), Mapping)
+                                  and (block.get("metadata") or {}).get("sheet")})
+            if not text:
+                warnings.append("markdown_empty: 工作簿没有可渲染的工作表内容")
         else:
             text, page_count = self._from_pages(document, options)
             renderer = "pages"

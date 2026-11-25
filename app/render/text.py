@@ -43,7 +43,17 @@ class PlainTextRenderer:
             renderer = "pages" if text else "empty"
             meta["pages"] = len(page_list)
             if not text:
-                warnings.append("plain_text_empty: 文档既无既有表示，也无页面文本")
+                # 工作簿等来源没有页面定义，回退到块文本（含标题块）。
+                blocks = document.get("blocks")
+                block_texts = [
+                    block.get("text")
+                    for block in (blocks if isinstance(blocks, list) else [])
+                    if isinstance(block, Mapping) and isinstance(block.get("text"), str) and block.get("text")
+                ]
+                text = options.plain_text_block_separator.join(block_texts)
+                renderer = "blocks" if text else "empty"
+                if not text:
+                    warnings.append("plain_text_empty: 文档既无既有表示，也无页面或块文本")
 
         return RenderArtifact(
             kind=self.kind,

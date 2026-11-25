@@ -1,6 +1,6 @@
 # ParseFlow v1.6.1 技术方案：渲染层解耦
 
-状态：进行中（2026-11-25）。已完成：阶段 0 门禁通过、渲染层契约与注册表、PyMuPDF / PaddleOCR / PPT 表示生成迁移（字节等价回归）、导出层改为调用渲染层、页面级图片引用能力。已否决：CJK 空格清理（实测误删率 96.2%，代码已移除）。待完成：Excel 迁移（需 sections 渲染能力）、manifest schema 字段。跨页表格无生产者，暂缓。依据见 [DocVortex 能力吸收决策记录](docvortex-adoption.md)。
+状态：实现完成（2026-11-25）。阶段 0 门禁通过；渲染层契约与注册表；PyMuPDF / PaddleOCR / PPT / Excel 表示生成全部迁移（字节等价回归）；导出层改为调用渲染层；页面级图片引用；工作簿 sheet 分组渲染；manifest schema 身份与版本；CJK 空格清理实测否决并移除。跨页表格无生产者，暂缓。依据见 [DocVortex 能力吸收决策记录](docvortex-adoption.md)。
 
 版本定位：**PATCH**（见 [版本策略](versioning.md)）。本版本无对外新能力：输出格式不变、端点不变、默认链路不变。改的是结构（渲染层解耦）与缺陷（中文空格、跨页表格），外加向后兼容的附加字段。因此不升 MINOR。
 
@@ -45,13 +45,15 @@ app/render/json.py        structured_content 投影
 - 解析器直接产出的 markdown（pdf-inspector、Mammoth 的 HTML→Markdown）：这是解析结果本身，渲染层只做透传。
 - 带页面级图片引用的 markdown（PaddleOCR 每页追加 `![第 N 页图片](路径)`）：需要渲染器支持按页分组图片后才能下沉，暂缓。
 - 源文本围栏（text/raw 来源）：与文件后缀、围栏长度相关，属于读取语义，不属于排版。
+- 单图 OCR（`image_ocr`）：图片链接模板是 `![图片区域](路径)`，无页码前缀，且只有一页。若强行套用页面级引用会改变文案与结构，收益不足，暂不下沉。
+- 音视频（`ffmpeg`）：表示由字幕轨与时间轴直接构成，不是页面/块投影，属于解析结果本身，不下沉。
 
 判定规则：若下沉会导致输出字节变化或需要引入 Provider 私有数据，则该表示暂不下沉，并在 Provider 内保留注释说明原因。
 
 **实施发现（2026-11-24）**：
 
-- Excel 的 markdown 需要按 sheet 分组并加 `- ` 前缀，属于结构化分组渲染，需新增渲染能力后才能下沉。
-- PaddleOCR 的 markdown 需要按页追加图片引用，需渲染器支持按页分组图片后才能下沉。
+- Excel 已迁移：新增 `body_source="sheet"`，按 `blocks[].metadata.sheet` 分组，标题 `## {name}` + 每行 `- {row}`，空表跳过；纯文本在无页面时回退块拼接。
+- PaddleOCR 已迁移：新增 `page_asset_links`，按页归组图片并在页尾追加引用。
 - PaddleOCR 的按页图片引用能力已落地：`RenderOptions.page_asset_links` + 链接模板，按 `page_number`/`occurrences` 归组，缺相对路径的图片跳过并告警。空正文 + 有图时**刻意复现** 1.6.0 的前导分隔符以保证字节等价。
 - CJK 空格清理曾接入全局策略，实测误删率 96.2% 后**整体移除**（含 `app/render/policy.py` 与配置项），结论见 1C-1。
 - 跨页表格续接（`continues_prev`）目前**没有生产者**：现有 PDF Provider 不产出分页 `tables`（pdf-inspector 的表格在 markdown 内），Excel/PPT 表格不跨页。该项缺少数据来源，暂缓到出现真实跨页表格来源后再做，避免先加死字段。

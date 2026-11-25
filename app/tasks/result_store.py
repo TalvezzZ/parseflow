@@ -29,6 +29,11 @@ class ResultWriteCancelled(ResultStorageError):
 _JSON = json.JSONEncoder(ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
+# 结果目录协议的稳定身份；读者应同时校验 schema 与 schema_version。
+RESULT_MANIFEST_SCHEMA = "parseflow.result"
+RESULT_MANIFEST_VERSION = 1
+
+
 def safe_result_path(workspace: Path, storage_key: str) -> Path:
     """Resolve relative keys without following even intermediate symlinks."""
     relative = PurePosixPath(storage_key)
@@ -195,6 +200,22 @@ def bounded_preview(document: dict[str, Any], max_bytes: int = 256 * 1024) -> tu
                     shortened = True
                 table.update(info)
             metadata["result_storage"]["preview_truncated"] = shortened
+    media = (document.get("metadata") or {}).get("media")
+    media_identity = {}
+    if document.get("document_type") in {"audio", "video"} and isinstance(media, dict):
+        for key in ("media_type", "duration_ms", "format", "subtitle_available", "transcript_available", "asr_status",
+                    "subtitle_count", "subtitle_cue_count", "content_scope", "timeline_source", "timeline_file",
+                    "timeline_time_base", "timeline_schema_version", "selected_audio_stream_index", "selected_subtitle_stream_index",
+                    "audio_mode", "subtitle_mode", "source_start_time", "duration_basis"):
+            value = media.get(key)
+            if value is None or isinstance(value, (bool, int, float, str)):
+                media_identity[key] = value[:256] if isinstance(value, str) else value
+        media_identity["stages"] = [{key: (str(value)[:256] if isinstance(value, str) else value)
+            for key, value in stage.items() if key in {"name", "status", "reason", "cue_count"}}
+            for stage in media.get("stages", [])[:4] if isinstance(stage, dict)]
+        current_media = metadata.get("media") if isinstance(metadata.get("media"), dict) else {}
+        current_media.update(media_identity)
+        metadata["media"] = current_media
     for key in ("pages", "blocks", "tables", "images"):
         if not isinstance(preview.get(key), list):
             preview[key] = []
@@ -206,6 +227,8 @@ def bounded_preview(document: dict[str, Any], max_bytes: int = 256 * 1024) -> tu
         preview = {key: preview.get(key) for key in ("document_id", "document_type", "source_file", "parser", "quality")}
         preview.update(pages=[], blocks=[], tables=sheet_directory, images=[], representations={},
                        metadata={"result_storage": {"schema_version": 1, "filename": "result/manifest.json", "preview_truncated": True}})
+        if media_identity:
+            preview["metadata"]["media"] = media_identity
         if isinstance(excel, dict) and excel.get("filename") in {"workbook.sqlite", "workbook/manifest.json"}:
             preview["metadata"]["excel_storage"] = {"filename": excel["filename"], "schema_version": excel.get("schema_version", 1)}
     return preview, shortened
@@ -220,7 +243,9 @@ def publish_result(workspace: Path, document: dict[str, Any] | None, *, payload:
     temporary = workspace / (".result-" + uuid4().hex)
     temporary.mkdir()
     publisher = _Publisher(temporary, max_bytes, cancel)
-    manifest: dict[str, Any] = {"schema_version": 1, "document_type": (document or {}).get("document_type", "media"),
+    # schema 身份与版本分开：schema 标识协议名，schema_version 标识该协议的结构版本。
+    manifest: dict[str, Any] = {"schema": RESULT_MANIFEST_SCHEMA, "schema_version": RESULT_MANIFEST_VERSION,
+                                "document_type": (document or {}).get("document_type", "media"),
                                 "units": [], "representations": {}, "resources": []}
     preview = None
     try:
@@ -334,7 +359,9 @@ def publish_result(workspace: Path, document: dict[str, Any] | None, *, payload:
             raise ResultStorageError("结果目录已发布，禁止覆盖")
         publisher.check()
         os.replace(temporary, destination)
-        return preview, {"schema_version": 1, "storage_key": "result/manifest.json",
+        # result_ref 是任务记录中的稳定引用；它与 manifest 使用同一协议版本，便于客户端校验。
+        return preview, {"schema": RESULT_MANIFEST_SCHEMA, "schema_version": RESULT_MANIFEST_VERSION,
+                         "storage_key": "result/manifest.json",
                          "preview_truncated": manifest["preview_truncated"],
                          "document_size_bytes": manifest["document"]["size_bytes"]}
     finally:
@@ -385,8 +412,12 @@ def load_result_manifest(workspace: Path) -> dict:
     if path.stat().st_size > 32 * 1024 * 1024:
         raise ResultStorageError("结果目录超过大小预算")
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("schema_version") != 1:
+    if not isinstance(value, dict) or value.get("schema_version") != RESULT_MANIFEST_VERSION:
         raise ResultStorageError("不支持的结果存储版本")
+    # 旧 manifest 没有 schema 字段；只校验出现的身份，避免拒绝既有任务。
+    declared = value.get("schema")
+    if declared is not None and declared != RESULT_MANIFEST_SCHEMA:
+        raise ResultStorageError("结果目录 schema 身份不匹配")
     if not isinstance(value.get("units"), list) or not isinstance(value.get("resources"), list):
         raise ResultStorageError("结果目录结构损坏")
     for unit in value["units"]:
